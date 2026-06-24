@@ -1,0 +1,13 @@
+id,started_at,ended_at,duration_s,source_ip,source_country,source_isp,source_asn,source_tool_guess,source_tool_confidence,source_os_guess,scan_type,scan_confidence,unique_ports,unique_targets,packet_count,risk_score,risk_level
+8,2026-06-12T03:14:01.915812,2026-06-12T03:14:02.011023,0.095211,192.168.1.50,Private LAN,Local Network,RFC1918,Nmap,55.0,Linux,SYN Scan (Stealth),90.0,20,1,20,4.8,medium
+7,2026-06-12T03:13:48.665680,2026-06-12T03:13:54.561998,5.896318,10.0.0.137,Private LAN,Local Network,RFC1918,Custom Scanner,30.0,Network device,FIN Scan,85.0,20,1,33,4.8,medium
+12,2026-06-12T03:13:46.518442,2026-06-12T03:14:16.512455,29.994013,13.232.45.9,United States,Amazon AWS,AS16509,Zenmap,60.0,Linux,Service Enumeration,75.0,105,2,131,5.4,medium
+11,2026-06-12T03:13:46.031817,2026-06-12T03:14:13.574103,27.542286,13.232.45.9,United States,Amazon AWS,AS16509,Zenmap,60.0,Linux,TCP Connect Scan,80.0,178,2,200,5.4,medium
+10,2026-06-12T03:13:45.981366,2026-06-12T03:14:12.872702,26.891336,13.232.45.9,United States,Amazon AWS,AS16509,Zenmap,60.0,Linux,Generic TCP Probe,50.0,180,2,200,4.9,medium
+9,2026-06-12T03:13:45.849928,2026-06-12T03:14:10.211886,24.361958,13.232.45.9,United States,Amazon AWS,AS16509,Zenmap,60.0,Linux,SYN Scan (Stealth),90.0,184,2,200,5.9,medium
+6,2026-06-12T03:13:39.595419,2026-06-12T03:13:39.668397,0.072978,13.232.45.9,United States,Amazon AWS,AS16509,Nmap,55.0,Linux,SYN Scan (Stealth),90.0,20,1,20,4.8,medium
+5,2026-06-12T03:13:27.032060,2026-06-12T03:13:28.117057,1.084997,198.51.100.23,Documentation,RFC 5737 TEST-NET-2,AS0,Nmap,55.0,Linux,SYN Scan (Stealth),90.0,20,1,34,4.8,medium
+4,2026-06-12T03:12:53.291029,2026-06-12T03:13:17.195596,23.904567,103.42.91.18,India,Airtel,AS24560,Zenmap,60.0,Linux/Unix,SYN Scan (Stealth),90.0,20,2,51,4.7,medium
+3,2026-06-12T03:12:38.459040,2026-06-12T03:12:38.532535,0.073495,13.232.45.9,United States,Amazon AWS,AS16509,Nmap,55.0,Linux/Unix,SYN Scan (Stealth),90.0,20,1,20,4.8,medium
+2,2026-06-12T03:12:25.433103,2026-06-12T03:12:26.726985,1.293882,8.8.8.8,United States,Google LLC,AS15169,Zenmap,60.0,Linux,SYN Scan (Stealth),90.0,20,1,20,4.6,medium
+1,2026-06-12T03:12:17.366214,2026-06-12T03:12:17.443239,0.077025,198.51.100.23,Documentation,RFC 5737 TEST-NET-2,AS0,Nmap,55.0,Linux,SYN Scan (Stealth),90.0,20,1,20,4.8,medium

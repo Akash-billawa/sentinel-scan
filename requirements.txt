@@ -1,0 +1,28 @@
+# ===== SentinelScan AI — runtime dependencies =====
+# Core backend
+Flask==3.0.3
+Flask-Cors==4.0.1
+python-dotenv==1.0.1
+
+# Database
+SQLAlchemy==2.0.32
+
+# Packet capture (live mode)
+scapy==2.5.0
+# Note: on Windows, install Npcap (https://npcap.com) and run as Administrator
+# On Linux: install libpcap-dev and run with root or CAP_NET_RAW
+
+# Reporting
+reportlab==4.2.2
+
+# Alerting
+requests==2.32.3
+plyer==2.1.0
+
+# Encrypted log storage (Fernet/AES-128-CBC + HMAC-SHA256).  Only used when
+# SENTINEL_ENCRYPT_LOGS=true, but imported lazily so it's not a hard runtime
+# dependency unless you turn encryption on.
+cryptography>=42.0.0
+
+# Optional: better geolocation (free, no key required)
+# Falls back to a built-in demo dataset when offline.

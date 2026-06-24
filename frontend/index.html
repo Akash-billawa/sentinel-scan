@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SentinelScan AI — Reconnaissance Detection</title>
+  <meta name="description" content="Real-time network reconnaissance detection and alert system" />
+
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('sentinelscan.theme');
+        if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="stylesheet" href="/static/css/style.css" />
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%2318B69B' d='M12 2 4 5v6c0 5 3.4 9.5 8 11 4.6-1.5 8-6 8-11V5l-8-3Z'/%3E%3Cpath fill='%230C0E12' d='m10.5 14.2 4.6-4.6-1-1-3.6 3.6-1.6-1.6-1 1 2.6 2.6Z'/%3E%3C/svg%3E" />
+
+  <!-- SVG icon sprite — all icons referenced by <use href="#icon-*"> -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <!-- shield-check -->
+    <symbol id="icon-shield" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 1.5 2.5 3.5v4c0 3.3 2.2 6.3 5.5 7.3 3.3-1 5.5-4 5.5-7.3v-4L8 1.5Z"/>
+      <path d="m5.5 8 2 2 3-3"/>
+    </symbol>
+    <!-- chart-bar -->
+    <symbol id="icon-chart-bar" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="9" width="3" height="5" rx=".5"/>
+      <rect x="6.5" y="5" width="3" height="9" rx=".5"/>
+      <rect x="11" y="2" width="3" height="12" rx=".5"/>
+    </symbol>
+    <!-- activity / timeline -->
+    <symbol id="icon-activity" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="1 8 4 5 7 10 10 4 13 7 15 7"/>
+    </symbol>
+    <!-- pie -->
+    <symbol id="icon-pie" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2a6 6 0 1 0 6 6H8V2Z"/>
+      <path d="M8 2v6h6"/>
+    </symbol>
+    <!-- globe -->
+    <symbol id="icon-globe" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="8" cy="8" r="6"/>
+      <path d="M2 8h12M8 2a9.7 9.7 0 0 1 2.5 6A9.7 9.7 0 0 1 8 14 9.7 9.7 0 0 1 5.5 8 9.7 9.7 0 0 1 8 2Z"/>
+    </symbol>
+    <!-- alert-triangle -->
+    <symbol id="icon-alert" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2 1.5 13.5h13L8 2Z"/>
+      <line x1="8" y1="6.5" x2="8" y2="9.5"/>
+      <line x1="8" y1="11.5" x2="8.01" y2="11.5"/>
+    </symbol>
+    <!-- bell -->
+    <symbol id="icon-bell" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 1.5a4.5 4.5 0 0 0-4.5 4.5v3L2 11h12l-1.5-2V6A4.5 4.5 0 0 0 8 1.5Z"/>
+      <path d="M6.5 11v.5a1.5 1.5 0 0 0 3 0V11"/>
+    </symbol>
+    <!-- layers / packets -->
+    <symbol id="icon-layers" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="8,1.5 14.5,5 8,8.5 1.5,5"/>
+      <polyline points="1.5,9 8,12.5 14.5,9"/>
+      <polyline points="1.5,12 8,15.5 14.5,12"/>
+    </symbol>
+    <!-- shield-x / blocked -->
+    <symbol id="icon-block" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 1.5 2.5 3.5v4c0 3.3 2.2 6.3 5.5 7.3 3.3-1 5.5-4 5.5-7.3v-4L8 1.5Z"/>
+      <line x1="6" y1="6" x2="10" y2="10"/>
+      <line x1="10" y1="6" x2="6" y2="10"/>
+    </symbol>
+    <!-- sliders / settings -->
+    <symbol id="icon-settings" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="3" y1="4" x2="13" y2="4"/>
+      <line x1="3" y1="8" x2="13" y2="8"/>
+      <line x1="3" y1="12" x2="13" y2="12"/>
+      <circle cx="5.5" cy="4" r="1.5" fill="var(--c-bg,#0C0E12)" stroke="currentColor"/>
+      <circle cx="10.5" cy="8" r="1.5" fill="var(--c-bg,#0C0E12)" stroke="currentColor"/>
+      <circle cx="7" cy="12" r="1.5" fill="var(--c-bg,#0C0E12)" stroke="currentColor"/>
+    </symbol>
+    <!-- download -->
+    <symbol id="icon-download" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 2v8M5 7l3 3 3-3"/>
+      <path d="M2.5 12h11"/>
+    </symbol>
+    <!-- play -->
+    <symbol id="icon-play" viewBox="0 0 16 16" fill="currentColor">
+      <polygon points="4,2 13,8 4,14"/>
+    </symbol>
+    <!-- stop / square -->
+    <symbol id="icon-stop" viewBox="0 0 16 16" fill="currentColor">
+      <rect x="3" y="3" width="10" height="10" rx="1.5"/>
+    </symbol>
+    <!-- refresh -->
+    <symbol id="icon-refresh" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13.5 8A5.5 5.5 0 1 1 10 3.1"/>
+      <polyline points="13.5,1 13.5,4.5 10,4.5"/>
+    </symbol>
+    <!-- sun -->
+    <symbol id="icon-sun" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <circle cx="8" cy="8" r="3"/>
+      <line x1="8" y1="1" x2="8" y2="2.5"/>
+      <line x1="8" y1="13.5" x2="8" y2="15"/>
+      <line x1="1" y1="8" x2="2.5" y2="8"/>
+      <line x1="13.5" y1="8" x2="15" y2="8"/>
+      <line x1="3.1" y1="3.1" x2="4.2" y2="4.2"/>
+      <line x1="11.8" y1="11.8" x2="12.9" y2="12.9"/>
+      <line x1="12.9" y1="3.1" x2="11.8" y2="4.2"/>
+      <line x1="4.2" y1="11.8" x2="3.1" y2="12.9"/>
+    </symbol>
+    <!-- moon -->
+    <symbol id="icon-moon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13.5 10A6 6 0 1 1 6 2.5a4.5 4.5 0 0 0 7.5 7.5Z"/>
+    </symbol>
+    <!-- log-out -->
+    <symbol id="icon-logout" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 2H3.5A1.5 1.5 0 0 0 2 3.5v9A1.5 1.5 0 0 0 3.5 14H6"/>
+      <polyline points="10,5 14,8 10,11"/>
+      <line x1="14" y1="8" x2="6" y2="8"/>
+    </symbol>
+    <!-- cpu / ML -->
+    <symbol id="icon-cpu" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="4" width="8" height="8" rx="1"/>
+      <line x1="6" y1="1.5" x2="6" y2="4"/><line x1="10" y1="1.5" x2="10" y2="4"/>
+      <line x1="6" y1="12" x2="6" y2="14.5"/><line x1="10" y1="12" x2="10" y2="14.5"/>
+      <line x1="1.5" y1="6" x2="4" y2="6"/><line x1="1.5" y1="10" x2="4" y2="10"/>
+      <line x1="12" y1="6" x2="14.5" y2="6"/><line x1="12" y1="10" x2="14.5" y2="10"/>
+    </symbol>
+    <!-- check -->
+    <symbol id="icon-check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="2.5,8 6,12 13.5,4"/>
+    </symbol>
+    <!-- x / close -->
+    <symbol id="icon-x" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <line x1="3" y1="3" x2="13" y2="13"/>
+      <line x1="13" y1="3" x2="3" y2="13"/>
+    </symbol>
+    <!-- plus -->
+    <symbol id="icon-plus" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <line x1="8" y1="2" x2="8" y2="14"/>
+      <line x1="2" y1="8" x2="14" y2="8"/>
+    </symbol>
+    <!-- info -->
+    <symbol id="icon-info" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <circle cx="8" cy="8" r="6.5"/>
+      <line x1="8" y1="7" x2="8" y2="11.5"/>
+      <circle cx="8" cy="4.5" r="0.5" fill="currentColor"/>
+    </symbol>
+    <!-- server -->
+    <symbol id="icon-server" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="1.5" y="2" width="13" height="5" rx="1"/>
+      <rect x="1.5" y="9" width="13" height="5" rx="1"/>
+      <circle cx="13" cy="4.5" r="0.8" fill="currentColor" stroke="none"/>
+      <circle cx="13" cy="11.5" r="0.8" fill="currentColor" stroke="none"/>
+    </symbol>
+    <!-- zap / inject -->
+    <symbol id="icon-zap" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="9,2 5,9 8.5,9 7,14 11,7 7.5,7"/>
+    </symbol>
+  </svg>
+</head>
+
+<body>
+
+  <!-- ═══ TOP BAR ═══════════════════════════════════════ -->
+  <div class="layout">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <div class="topbar-logo">
+          <svg viewBox="0 0 24 24" fill="#fff"><path d="M12 2 4 5v6c0 5 3.4 9.5 8 11 4.6-1.5 8-6 8-11V5l-8-3Z"/></svg>
+        </div>
+        <span class="topbar-name">SentinelScan AI</span>
+      </div>
+
+      <div class="topbar-sep" aria-hidden="true"></div>
+
+      <!-- Engine status pill -->
+      <div id="engine-pill" class="status-chip">
+        <span id="engine-dot" class="engine-dot stopped"></span>
+        <span id="engine-label" style="color:var(--c-text-3)">stopped</span>
+      </div>
+
+      <!-- Counters -->
+      <div class="status-chip" data-tip="Total packets observed">
+        <span style="color:var(--c-text-4)">pkts</span>
+        <span id="packet-count" class="val">0</span>
+      </div>
+      <div class="status-chip" data-tip="Total attacks detected">
+        <span style="color:var(--c-text-4)">attacks</span>
+        <span id="attack-count" class="val" style="color:var(--c-high)">0</span>
+      </div>
+
+      <div class="topbar-right">
+        <!-- Engine controls -->
+        <div style="display:flex;align-items:center;gap:4px;padding:2px;background:var(--c-surface-2);border:1px solid var(--c-border);border-radius:var(--r-md)">
+          <button id="btn-start" class="btn btn-sm btn-success" aria-label="Start engine">
+            <svg width="11" height="11"><use href="#icon-play"/></svg>
+            Start
+          </button>
+          <button id="btn-stop" class="btn btn-sm btn-ghost" aria-label="Stop engine">
+            <svg width="11" height="11"><use href="#icon-stop"/></svg>
+            Stop
+          </button>
+        </div>
+
+        <button id="btn-refresh" class="btn btn-sm btn-ghost btn-icon" data-tip="Refresh dashboard" aria-label="Refresh">
+          <svg width="14" height="14"><use href="#icon-refresh"/></svg>
+        </button>
+
+        <!-- Theme toggle -->
+        <button id="btn-theme" class="btn btn-sm btn-ghost btn-icon" data-tip="Toggle theme" aria-label="Toggle theme">
+          <svg class="icon-sun" width="14" height="14"><use href="#icon-sun"/></svg>
+          <svg class="icon-moon" width="14" height="14"><use href="#icon-moon"/></svg>
+        </button>
+
+        <button id="btn-logout" class="btn btn-sm btn-ghost" aria-label="Sign out">
+          <svg width="14" height="14"><use href="#icon-logout"/></svg>
+          Sign out
+        </button>
+      </div>
+    </header>
+
+    <!-- ═══ SIDEBAR ════════════════════════════════════ -->
+    <nav class="sidebar" aria-label="Dashboard navigation">
+      <div class="nav-section">
+        <span class="nav-label">Overview</span>
+        <a href="#sec-stats"    class="nav-link active">
+          <svg width="14" height="14"><use href="#icon-server"/></svg>Stats
+        </a>
+        <a href="#sec-timeline" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-activity"/></svg>Timeline
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-label">Analysis</span>
+        <a href="#sec-distribution" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-pie"/></svg>Distributions
+        </a>
+        <a href="#sec-sources" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-globe"/></svg>Top Sources
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-label">Live</span>
+        <a href="#sec-events" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-alert"/></svg>Events
+        </a>
+        <a href="#sec-alerts" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-bell"/></svg>Alert Log
+        </a>
+        <a href="#sec-packets" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-layers"/></svg>Packet Feed
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-label">IPS</span>
+        <a href="#sec-ips" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-shield"/></svg>Pending
+        </a>
+        <a href="#sec-blocked" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-block"/></svg>Blocked IPs
+        </a>
+        <a href="#sec-approved" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-shield"/></svg>Approved IPs
+        </a>
+        <a href="#sec-ips-settings" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-settings"/></svg>IPS Settings
+        </a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-label">Export</span>
+        <a href="#sec-reports" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-download"/></svg>Reports
+        </a>
+        <a href="#sec-schedules" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-settings"/></svg>Schedules
+        </a>
+        <a href="#sec-source-timeline" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-activity"/></svg>Source Timeline
+        </a>
+        <a href="#sec-topology" class="nav-link">
+          <svg width="14" height="14"><use href="#icon-globe"/></svg>Topology
+        </a>
+      </div>
+    </nav>
+
+    <!-- ═══ MAIN ═══════════════════════════════════════ -->
+    <main class="main-content">
+
+      <!-- ── Stats ── -->
+      <section id="sec-stats" class="page-section">
+        <div class="section-hd">
+          <div class="section-hd-left">
+            <div class="section-title">Live Overview</div>
+            <div class="section-sub">Refreshes every 2.5 s while engine is running</div>
+          </div>
+          <div class="section-hd-right">
+            <span id="last-updated" class="last-updated" aria-live="polite">
+              <span class="dot"></span><span>—</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat-card rose">
+            <div class="stat-row">
+              <div class="stat-label">Total Attacks</div>
+              <div class="stat-icon rose">
+                <svg width="14" height="14"><use href="#icon-alert"/></svg>
+              </div>
+            </div>
+            <div id="stat-total" class="stat-value">0</div>
+            <div class="stat-foot">since session start</div>
+          </div>
+
+          <div class="stat-card amber">
+            <div class="stat-row">
+              <div class="stat-label">Last 24 Hours</div>
+              <div class="stat-icon amber">
+                <svg width="14" height="14"><use href="#icon-activity"/></svg>
+              </div>
+            </div>
+            <div id="stat-24h" class="stat-value">0</div>
+            <div class="stat-foot">attacks in the past day</div>
+          </div>
+
+          <div class="stat-card teal">
+            <div class="stat-row">
+              <div class="stat-label">Active Threats</div>
+              <div class="stat-icon teal">
+                <svg width="14" height="14"><use href="#icon-shield"/></svg>
+              </div>
+            </div>
+            <div id="stat-active" class="stat-value">0</div>
+            <div class="stat-foot">attacks in the past hour</div>
+          </div>
+
+          <div class="stat-card crit">
+            <div class="stat-row">
+              <div class="stat-label">Critical</div>
+              <div class="stat-icon crit">
+                <svg width="14" height="14"><use href="#icon-alert"/></svg>
+              </div>
+            </div>
+            <div id="stat-critical" class="stat-value crit">0</div>
+            <div class="stat-foot">severity: critical</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Charts ── -->
+      <section id="sec-timeline" class="page-section" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div class="card" style="grid-column:span 2">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Attack Timeline</div>
+              <div class="card-sub">Last 24 hours · hourly buckets</div>
+            </div>
+          </div>
+          <div style="height:220px"><canvas id="chart-timeline" aria-label="Attacks per hour"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-hd">
+            <div class="card-title">Risk Distribution</div>
+            <div class="card-sub" style="margin-top:2px">all attacks</div>
+          </div>
+          <div style="height:220px"><canvas id="chart-risk" aria-label="Risk distribution"></canvas></div>
+        </div>
+      </section>
+
+      <!-- ── Distributions ── -->
+      <section id="sec-distribution" class="page-section" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        <div class="card">
+          <div class="card-title" style="margin-bottom:14px">Scan Types</div>
+          <div style="height:200px"><canvas id="chart-scans" aria-label="Scan types"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:14px">Tool Fingerprints</div>
+          <div style="height:200px"><canvas id="chart-tools" aria-label="Tool fingerprints"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:14px">Source Countries</div>
+          <div style="height:200px"><canvas id="chart-countries" aria-label="Source countries"></canvas></div>
+        </div>
+      </section>
+
+      <!-- ── Top Sources + Capture Mode ── -->
+      <section id="sec-sources" class="page-section" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div class="card" style="grid-column:span 2">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Top Source IPs</div>
+              <div class="card-sub">Most active attackers by hit count</div>
+            </div>
+            <div class="card-actions">
+              <span id="top-sources-count" style="font-size:11.5px;color:var(--c-text-4)">0 sources</span>
+            </div>
+          </div>
+          <div id="top-sources" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:14px">Capture Mode</div>
+          <p style="font-size:11.5px;color:var(--c-text-3);margin-bottom:12px">How SentinelScan observes your network.</p>
+          <div style="display:flex;flex-direction:column;gap:6px" role="radiogroup" aria-label="Capture mode">
+            <label class="mode-option">
+              <input type="radio" name="mode" value="sim" />
+              <div>
+                <div class="mode-title">Simulation</div>
+                <div class="mode-desc">Replay realistic patterns — no admin required.</div>
+              </div>
+            </label>
+            <label class="mode-option selected">
+              <input type="radio" name="mode" value="auto" checked />
+              <div>
+                <div class="mode-title">Auto (recommended)</div>
+                <div class="mode-desc">Try live capture, fall back to simulation.</div>
+              </div>
+            </label>
+            <label class="mode-option">
+              <input type="radio" name="mode" value="live" />
+              <div>
+                <div class="mode-title">Live</div>
+                <div class="mode-desc">Scapy / Npcap — requires admin.</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="intensity-wrap">
+            <div class="intensity-row">
+              <span class="intensity-label">Simulation intensity</span>
+              <span id="intensity-indicator" class="intensity-val">1.0×</span>
+            </div>
+            <input id="intensity" type="range" min="0.2" max="3" step="0.1" value="1" aria-label="Simulation intensity" />
+            <div class="intensity-scale">
+              <span>quiet</span><span>normal</span><span>busy</span>
+            </div>
+          </div>
+
+          <button id="btn-inject" class="btn btn-ghost btn-full" style="margin-top:12px">
+            <svg width="14" height="14"><use href="#icon-zap"/></svg>
+            Inject test packet
+          </button>
+        </div>
+      </section>
+
+      <!-- ── Detected Events ── -->
+      <section id="sec-events" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Detected Events</div>
+              <div class="card-sub">Click for detail · <kbd style="font-family:inherit;font-size:11px;background:var(--c-surface-3);padding:1px 5px;border-radius:3px;border:1px solid var(--c-border-mid)">↑↓</kbd> navigate · <kbd style="font-family:inherit;font-size:11px;background:var(--c-surface-3);padding:1px 5px;border-radius:3px;border:1px solid var(--c-border-mid)">Enter</kbd> open</div>
+            </div>
+            <div class="card-actions">
+              <span style="font-size:11.5px;color:var(--c-text-4)">
+                <span id="attacks-shown">0</span> / <span id="attacks-total">0</span>
+                &nbsp;·&nbsp;
+                <span id="attacks-unacked" style="color:var(--c-medium);font-weight:500">0</span> unacked
+              </span>
+            </div>
+          </div>
+
+          <div class="filter-bar">
+            <input id="attack-search" type="search" class="filter-search"
+                   placeholder="Filter by IP, country, ISP, scan type…"
+                   aria-label="Filter events" />
+            <div class="filter-chips" role="group" aria-label="Risk filter">
+              <button class="filter-chip active" data-risk="all" type="button">All</button>
+              <button class="filter-chip" data-risk="low" type="button">Low</button>
+              <button class="filter-chip" data-risk="medium" type="button">Medium</button>
+              <button class="filter-chip" data-risk="high" type="button">High</button>
+              <button class="filter-chip" data-risk="critical" type="button">Critical</button>
+            </div>
+          </div>
+
+          <ul id="events-list" class="event-list" role="listbox" aria-label="Detected events"></ul>
+        </div>
+      </section>
+
+      <!-- ── Alert Log ── -->
+      <section id="sec-alerts" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Alert Log</div>
+              <div class="card-sub">Latest outbound alerts</div>
+            </div>
+          </div>
+          <div id="alerts-list" style="display:flex;flex-direction:column;gap:6px;max-height:420px;overflow-y:auto;font-size:12.5px"></div>
+        </div>
+      </section>
+
+      <!-- ── IPS Pending ── -->
+      <section id="sec-ips" class="page-section">
+        <div class="card">
+          <div class="ips-toggle-bar">
+            <label class="toggle" data-tip="Toggle IPS">
+              <input type="checkbox" id="ips-enabled-toggle-inline" aria-label="Enable IPS">
+              <span class="toggle-track"></span>
+              <span class="toggle-thumb"></span>
+            </label>
+            <div class="ips-toggle-text flex-1">
+              <div class="label">Intrusion Prevention System</div>
+              <div class="desc">Block IPs automatically or require manual approval.</div>
+            </div>
+            <span id="ips-status-badge" class="badge badge-ips-off">Disabled</span>
+            <button id="btn-ips-refresh" class="btn btn-sm btn-ghost btn-icon" aria-label="Refresh IPS">
+              <svg width="13" height="13"><use href="#icon-refresh"/></svg>
+            </button>
+          </div>
+
+          <!-- ── OS Firewall enforcement status ── -->
+          <div id="firewall-enforcement-banner" style="display:none;padding:8px 14px;margin:0 14px 10px;border-radius:6px;font-size:12px;line-height:1.5"></div>
+
+          <div class="card-hd">
+            <div>
+              <div class="card-title">IPS Pending Actions</div>
+              <div class="card-sub">Threats awaiting approval before blocking</div>
+            </div>
+          </div>
+
+          <div id="ips-empty" class="tbl-empty" style="display:none">
+            <div class="tbl-empty-title">No pending actions</div>
+            <div>High-risk IPs will appear here in Manual Approval mode.</div>
+          </div>
+          <div id="ips-pending-list"></div>
+        </div>
+      </section>
+
+      <!-- ── Blocked IPs ── -->
+      <section id="sec-blocked" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Blocked IPs</div>
+              <div class="card-sub">IPs currently blocked by firewall rules</div>
+            </div>
+            <div class="card-actions">
+              <button id="btn-block-ip" class="btn btn-sm btn-danger">
+                <svg width="12" height="12"><use href="#icon-plus"/></svg>
+                Block IP
+              </button>
+            </div>
+          </div>
+
+          <div id="blocked-empty" class="tbl-empty" style="display:none">
+            <div class="tbl-empty-title">No IPs blocked</div>
+            <div>Use <strong>Block IP</strong> to add a firewall rule manually.</div>
+          </div>
+          <div class="tbl-wrap">
+            <table id="blocked-table" class="tbl" style="display:none">
+              <thead>
+                <tr>
+                  <th>IP Address</th>
+                  <th>Direction</th>
+                  <th>Status</th>
+                  <th>Verified At</th>
+                  <th>Reason</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="blocked-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Approved IPs (whitelist) ── -->
+      <section id="sec-approved" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Approved IPs</div>
+              <div class="card-sub">IPs temporarily whitelisted (traffic allowed)</div>
+            </div>
+          </div>
+
+          <div id="approved-empty" class="tbl-empty" style="display:none">
+            <div class="tbl-empty-title">No approved IPs</div>
+            <div>Use <strong>Allow</strong> on a pending action to whitelist an IP.</div>
+          </div>
+          <div class="tbl-wrap">
+            <table id="approved-table" class="tbl" style="display:none">
+              <thead>
+                <tr>
+                  <th>IP Address</th>
+                  <th>Reason</th>
+                  <th>Added By</th>
+                  <th>Expires At</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="approved-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── IPS Settings ── -->
+      <section id="sec-ips-settings" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">IPS Settings</div>
+              <div class="card-sub">Configure threat-response behaviour</div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div>
+              <label class="field-label">IPS Enabled</label>
+              <label class="toggle">
+                <input type="checkbox" id="ips-enabled-toggle" aria-label="Enable IPS">
+                <span class="toggle-track"></span>
+                <span class="toggle-thumb"></span>
+              </label>
+            </div>
+            <div>
+              <label class="field-label" for="ips-mode-select">IPS Mode</label>
+              <select id="ips-mode-select" class="field">
+                <option value="approve">Manual Approval</option>
+                <option value="auto_block">Auto Block</option>
+                <option value="alert_only">Alert Only</option>
+              </select>
+            </div>
+            <div>
+              <label class="field-label" for="ips-timeout-input">Approval Timeout (seconds)</label>
+              <input type="number" id="ips-timeout-input" min="10" max="300" value="60" class="field" />
+            </div>
+            <div>
+              <label class="field-label" for="ips-expiry-input">Block Expiry (seconds, 0 = never)</label>
+              <input type="number" id="ips-expiry-input" min="0" max="86400" value="0" class="field" />
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:12px;margin-top:18px">
+            <button id="btn-ips-save" class="btn btn-primary">Save Settings</button>
+            <span id="ips-save-status" style="font-size:11.5px;color:var(--c-text-3)" aria-live="polite"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Packet Feed ── -->
+      <section id="sec-packets" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Live Packet Feed</div>
+              <div class="card-sub">Most recent observed packets</div>
+            </div>
+            <div class="card-actions">
+              <span id="packets-count" style="font-size:11.5px;color:var(--c-text-4)">0 packets</span>
+            </div>
+          </div>
+          <div class="tbl-wrap">
+            <table class="tbl tbl-mono">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Source</th>
+                  <th>Destination</th>
+                  <th>Proto</th>
+                  <th>Flags</th>
+                  <th>Len</th>
+                </tr>
+              </thead>
+              <tbody id="packets-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Reports ── -->
+      <section id="sec-reports" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Reports</div>
+              <div class="card-sub">Export a full incident report or raw CSV</div>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <a id="dl-pdf" href="/api/reports/pdf" class="btn btn-danger btn-full">
+              <svg width="14" height="14"><use href="#icon-download"/></svg>
+              Download PDF Report
+            </a>
+            <a id="dl-csv" href="/api/reports/csv" class="btn btn-primary btn-full">
+              <svg width="14" height="14"><use href="#icon-download"/></svg>
+              Download CSV Log
+            </a>
+          </div>
+
+          <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--c-border)">
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--c-text-4);margin-bottom:8px">Alert Channels</div>
+            <ul id="channel-list" style="display:flex;flex-direction:column;gap:5px;font-size:12.5px;list-style:none"></ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Scheduled Reports ── -->
+      <section id="sec-schedules" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Scheduled Reports</div>
+              <div class="card-sub">Automated daily / weekly PDF reports delivered by email</div>
+            </div>
+            <div class="card-actions">
+              <button id="btn-sched-new" class="btn btn-sm btn-primary">
+                <svg width="11" height="11"><use href="#icon-plus"/></svg>
+                New Schedule
+              </button>
+            </div>
+          </div>
+
+          <div id="schedules-empty" class="tbl-empty" style="display:none">
+            <div class="tbl-empty-title">No schedules yet</div>
+            <div>Create a schedule to receive PDF reports by email.</div>
+          </div>
+          <div class="tbl-wrap">
+            <table id="schedules-table" class="tbl" style="display:none">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Frequency</th>
+                  <th>Recipients</th>
+                  <th>Last Run</th>
+                  <th>Next Run</th>
+                  <th>Active</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="schedules-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Per-Source Timeline ── -->
+      <section id="sec-source-timeline" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Per-Source Attack Timeline</div>
+              <div class="card-sub">Activity from a single attacker — dots = attacks, sized by risk</div>
+            </div>
+            <div class="card-actions" style="display:flex;align-items:center;gap:6px">
+              <input id="tl-ip-input" class="field" type="text" placeholder="e.g. 192.168.1.10"
+                     style="width:160px;font-family:'JetBrains Mono',monospace" />
+              <select id="tl-window-select" class="field" style="width:auto">
+                <option value="1">Last 1h</option>
+                <option value="6">Last 6h</option>
+                <option value="24" selected>Last 24h</option>
+                <option value="168">Last 7d</option>
+              </select>
+              <button id="btn-tl-load" class="btn btn-sm btn-primary">Load</button>
+            </div>
+          </div>
+
+          <div id="tl-summary" style="display:flex;gap:18px;font-size:12.5px;color:var(--c-text-3);margin-bottom:8px"></div>
+          <div style="height:280px"><canvas id="chart-tl-attacks" aria-label="Per-source attack timeline"></canvas></div>
+          <div style="height:160px;margin-top:10px"><canvas id="chart-tl-packets" aria-label="Per-source packet timeline"></canvas></div>
+
+          <div id="tl-attacks-list" style="margin-top:14px;display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto"></div>
+        </div>
+      </section>
+
+      <!-- ── Network Topology ── -->
+      <section id="sec-topology" class="page-section">
+        <div class="card">
+          <div class="card-hd">
+            <div>
+              <div class="card-title">Network Topology</div>
+              <div class="card-sub">Source → target graph · node size = packet count · color = risk</div>
+            </div>
+            <div class="card-actions" style="display:flex;align-items:center;gap:6px">
+              <span id="topo-stats" style="font-size:11.5px;color:var(--c-text-4)"></span>
+              <button id="btn-topo-refresh" class="btn btn-sm btn-ghost btn-icon" aria-label="Refresh topology">
+                <svg width="13" height="13"><use href="#icon-refresh"/></svg>
+              </button>
+            </div>
+          </div>
+          <div style="height:520px;position:relative;background:var(--c-surface-2);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden">
+            <canvas id="canvas-topology" aria-label="Network topology graph" style="display:block;width:100%;height:100%"></canvas>
+            <div id="topo-empty" class="tbl-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column">
+              <div class="tbl-empty-title">No topology data yet</div>
+              <div>Start the engine to populate source → target relationships.</div>
+            </div>
+          </div>
+          <div id="topo-legend" style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--c-text-3)"></div>
+        </div>
+      </section>
+
+      <footer style="padding:24px 0 8px;text-align:center;font-size:11.5px;color:var(--c-text-4)">
+        SentinelScan AI · Know who is probing your network before they get in.
+      </footer>
+    </main>
+  </div><!-- /layout -->
+
+  <!-- ── Toast host ── -->
+  <div id="toast-host" style="position:fixed;bottom:20px;right:20px;z-index:60;display:flex;flex-direction:column;gap:8px;align-items:flex-end"
+       aria-live="polite" aria-atomic="false"></div>
+
+  <!-- ── Drawer ── -->
+  <div id="attack-drawer" style="display:none;position:fixed;inset:0;z-index:40" aria-hidden="true">
+    <div class="drawer-overlay" data-drawer-close></div>
+    <aside class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <div class="drawer-header">
+        <span id="drawer-title" class="drawer-title">Event Detail</span>
+        <button class="btn btn-sm btn-ghost btn-icon" data-drawer-close aria-label="Close">
+          <svg width="14" height="14"><use href="#icon-x"/></svg>
+        </button>
+      </div>
+      <div id="drawer-body" class="drawer-body"></div>
+    </aside>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="/static/js/app.js" defer></script>
+</body>
+</html>

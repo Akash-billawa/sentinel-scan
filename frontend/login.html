@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in — SentinelScan AI</title>
+  <meta name="description" content="Sign in to SentinelScan AI network reconnaissance detection." />
+
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('sentinelscan.theme');
+        if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+      } catch (e) {}
+    })();
+  </script>
+
+  <link rel="stylesheet" href="/static/css/style.css" />
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%2318B69B' d='M12 2 4 5v6c0 5 3.4 9.5 8 11 4.6-1.5 8-6 8-11V5l-8-3Z'/%3E%3C/svg%3E" />
+</head>
+
+<body>
+  <div class="login-page">
+    <div class="login-card">
+
+      <!-- Logo -->
+      <div class="login-logo">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+          <path d="M12 2 4 5v6c0 5 3.4 9.5 8 11 4.6-1.5 8-6 8-11V5l-8-3Z" fill="white"/>
+          <path d="m9.5 12.5 2.5 2.5 4.5-5" stroke="#0C0E12" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+
+      <h1 class="login-title">SentinelScan AI</h1>
+      <p class="login-sub">Sign in to your reconnaissance monitoring dashboard</p>
+
+      <form id="login-form" class="login-form" autocomplete="on" novalidate>
+        <input type="hidden" id="login-next" name="next" value="" />
+
+        <div>
+          <label class="field-label" for="username">Username</label>
+          <input
+            class="field"
+            id="username"
+            name="username"
+            type="text"
+            autocomplete="username"
+            placeholder="admin"
+            required
+            autofocus
+          />
+        </div>
+
+        <div>
+          <label class="field-label" for="password">Password</label>
+          <input
+            class="field"
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="••••••••"
+            required
+          />
+        </div>
+
+        <div id="login-error" class="login-error" role="alert" aria-live="assertive"></div>
+
+        <button type="submit" id="login-btn" class="btn btn-primary btn-full btn-lg" style="margin-top:4px">
+          Sign in
+        </button>
+      </form>
+
+      <div class="login-footer">
+        <strong style="color:var(--c-text-3)">Forgot your password?</strong><br />
+        Run from the project root:<br />
+        <code>python -m backend.auth_cli reset admin123</code><br />
+        <span style="color:var(--c-text-4);font-size:11px">
+          (or set <code>SENTINEL_ADMIN_PASSWORD</code> in <code>.env</code> and restart)
+        </span><br /><br />
+        Locked out from too many attempts? Wait 60 s — the per-IP
+        login limiter resets automatically.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // Pre-fill ?next= so the JS can route after login
+    try {
+      var params = new URLSearchParams(location.search);
+      var next = params.get('next') || '/dashboard';
+      document.getElementById('login-next').value = next;
+    } catch (e) {}
+
+    // Show error message if present in query string (?error=...)
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var err = params.get('error');
+      if (err) {
+        var el = document.getElementById('login-error');
+        if (el) {
+          el.style.display = 'block';
+          el.textContent = err === 'invalid' ? 'Invalid username or password. Please try again.'
+                         : err === 'required' ? 'You must sign in to access this page.'
+                         : decodeURIComponent(err);
+        }
+      }
+    })();
+
+    // If already signed in, jump straight to the dashboard.
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d && d.user) {
+          var nxt = new URLSearchParams(location.search).get('next') || '/dashboard';
+          location.replace(nxt);
+        }
+      })
+      .catch(function () { /* offline / server down — let the user try */ });
+
+    // Handle form submit — POST as JSON to the real auth endpoint.
+    document.getElementById('login-form').addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      var btn = document.getElementById('login-btn');
+      var errEl = document.getElementById('login-error');
+      errEl.style.display = 'none';
+      btn.disabled = true;
+      var original = btn.textContent;
+      btn.textContent = 'Signing in…';
+      try {
+        var res = await fetch('/api/auth/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value,
+          }),
+        });
+        var data = await res.json().catch(function () { return {}; });
+        if (res.ok && data.ok) {
+          var nxt = document.getElementById('login-next').value || '/dashboard';
+          location.replace(nxt);
+          return;
+        }
+        var msg = data.error || ('Sign-in failed (HTTP ' + res.status + ').');
+        if (res.status === 429) {
+          msg = 'Too many failed attempts. Wait 60 s and try again, or run `python -m backend.auth_cli reset <password>` from the project root.';
+        } else if (res.status === 401 || /invalid/i.test(msg)) {
+          msg = 'Invalid username or password. Default is admin / (whatever SENTINEL_ADMIN_PASSWORD is set to). Reset with: python -m backend.auth_cli reset <password>';
+        }
+        errEl.textContent = msg;
+        errEl.style.display = 'block';
+      } catch (e) {
+        errEl.textContent = 'Network error: ' + (e && e.message ? e.message : e);
+        errEl.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  </script>
+</body>
+</html>

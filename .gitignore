@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Unit test / coverage reports
+.pytest_cache/
+.pytest_cache
+
+# OS-specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# IDEs and workspace metadata
+.idea/
+.vscode/
+*.swp
+*.swo
+.claude/
+.antigravitycli/
+.kimchi/
+
+# Project-specific database, logs, and sensitive environment variables
+.env
+data/
+logs/
+*.log
+reports/*.pdf
+reports/*.json
+venv/
+.venv/
+=
+foo.txt
