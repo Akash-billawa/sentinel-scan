@@ -27,7 +27,13 @@ const API = {
       location.replace('/login?next=' + next);
       return { ok: false, error: 'auth required' };
     }
-    return r.json();
+    const text = await r.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      console.error("Failed to parse JSON. Raw response:", text);
+      throw e;
+    }
   },
 };
 
@@ -2049,7 +2055,7 @@ function renderTimeline(data) {
   const scanTypes = Array.from(new Set(data.attacks.map((a) => a.scan_type)));
   const yMap = Object.fromEntries(scanTypes.map((s, i) => [s, i]));
   const attackPoints = data.attacks.map((a) => ({
-    x: a.time, y: yMap[a.scan_type] ?? 0,
+    x: new Date(a.time).getTime(), y: yMap[a.scan_type] ?? 0,
     r: Math.max(4, (a.risk_score || 0) * 1.6),
     _meta: a,
   }));
@@ -2068,8 +2074,8 @@ function renderTimeline(data) {
       options: {
         responsive: true, maintainAspectRatio: false,
         scales: {
-          x: { type: 'time', time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } }, grid: { color: c.grid } },
-          y: { ticks: { callback: (_v, i) => scanTypes[i] || '' }, grid: { color: c.grid }, min: -0.5, max: Math.max(0, scanTypes.length - 0.5) },
+          x: { type: 'linear', ticks: { callback: (v) => { const d = new Date(v); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; } }, grid: { color: c.grid } },
+          y: { ticks: { stepSize: 1, callback: (v) => scanTypes[Math.round(v)] || '' }, grid: { color: c.grid }, min: -0.5, max: Math.max(0, scanTypes.length - 0.5) },
         },
         plugins: {
           legend: { display: false },
@@ -2079,7 +2085,7 @@ function renderTimeline(data) {
                 const a = ctx.raw._meta;
                 return `${a.scan_type} · risk ${a.risk_score?.toFixed?.(1) || a.risk_score}`;
               },
-              title: (items) => items[0]?.raw?.x || '',
+              title: (items) => { const v = items[0]?.raw?.x; if (!v) return ''; const d = new Date(v); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; },
             },
           },
         },
@@ -2158,13 +2164,17 @@ function initTimeline() {
   });
 }
 
-// ---- Topology: tiny force-directed renderer on a canvas -----------------
-// ponytail: native canvas + Verlet-style sim. No D3. O(n²) per tick — fine
-// for <500 nodes, the realistic cap from the dashboard's last-24h window.
+// ---- Topology: physics renderer on a canvas -----------------
 const topo = {
   nodes: [], edges: [], animating: false,
   canvas: null, ctx: null, hover: null,
   width: 0, height: 0,
+  zoom: 1, panX: 0, panY: 0,
+  zoomV: 0, panVX: 0, panVY: 0,
+  targetZoom: 1, targetPanX: 0, targetPanY: 0,
+  isPanning: false, panMoved: false,
+  panStartX: 0, panStartY: 0,
+  panStartPanX: 0, panStartPanY: 0,
 };
 
 function riskColor(level) {
@@ -2172,86 +2182,202 @@ function riskColor(level) {
   return c.risk[level] || c.accent;
 }
 
+function topoRadius(n) {
+  if (n.isCluster) return 24;
+  return Math.max(4, Math.min(28, 4 + Math.sqrt(n.size) * 0.5));
+}
+
+function applySpring(current, velocity, target, mass, stiffness, damping, dt = 0.016) {
+  const force = -stiffness * (current - target) - damping * velocity;
+  const acceleration = force / mass;
+  const newVelocity = velocity + acceleration * dt;
+  const newCurrent = current + newVelocity * dt;
+  return [newCurrent, newVelocity];
+}
+
 function tickTopo() {
   if (!topo.animating) return;
   const { nodes, width, height } = topo;
   const cx = width / 2, cy = height / 2;
-  // Repulsion
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
+  const MAX_SPEED = 4;
+  let totalSpeed = 0;
+  const nLen = nodes.length;
+
+  // Node springs (scale animation)
+  for (let i = 0; i < nLen; i++) {
+    const n = nodes[i];
+    if (n.scaleV < 0) {
+      n.scaleV += 1.5; // Artificial delay recovery based on distance
+    } else {
+      const [sc, scV] = applySpring(n.scale || 0, n.scaleV || 0, 1.0, 1.0, 200.0, 20.0);
+      n.scale = sc; n.scaleV = scV;
+    }
+  }
+
+  // Force-directed layout
+  for (let i = 0; i < nLen; i++) {
+    for (let j = i + 1; j < nLen; j++) {
       const a = nodes[i], b = nodes[j];
       const dx = a.x - b.x, dy = a.y - b.y;
       const d2 = dx * dx + dy * dy + 0.01;
       const d = Math.sqrt(d2);
-      const f = 1200 / d2;
+      const ri = topoRadius(a), rj = topoRadius(b);
+      const minDist = ri + rj + 16;
+      if (d < minDist) {
+        const push = (minDist - d) * 0.5;
+        const nx = dx / d, ny = dy / d;
+        a.x += nx * push; b.x -= nx * push;
+        a.y += ny * push; b.y -= ny * push;
+      }
+      const f = 2000 * (ri + rj) / d2;
       const fx = (dx / d) * f, fy = (dy / d) * f;
       a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
     }
   }
-  // Spring along edges
+
   topo.edges.forEach(({ src, dst, weight }) => {
     const a = nodes[src], b = nodes[dst];
     if (!a || !b) return;
     const dx = b.x - a.x, dy = b.y - a.y;
     const d = Math.sqrt(dx * dx + dy * dy) + 0.01;
     const target = 90 + Math.log2(weight + 1) * 14;
-    const f = (d - target) * 0.04;
+    const f = (d - target) * 0.01;
     const fx = (dx / d) * f, fy = (dy / d) * f;
     a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
   });
-  // Gravity + integrate + damp
-  nodes.forEach((n) => {
-    n.vx += (cx - n.x) * 0.002;
-    n.vy += (cy - n.y) * 0.002;
+
+  for (let i = 0; i < nLen; i++) {
+    const n = nodes[i];
+    n.vx += (cx - n.x) * 0.003;
+    n.vy += (cy - n.y) * 0.003;
     n.vx *= 0.82; n.vy *= 0.82;
+    n.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, n.vx));
+    n.vy = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, n.vy));
+    totalSpeed += Math.abs(n.vx) + Math.abs(n.vy);
     n.x += n.vx; n.y += n.vy;
-    n.x = Math.max(20, Math.min(width - 20, n.x));
-    n.y = Math.max(20, Math.min(height - 20, n.y));
-  });
+    n.x = Math.max(32, Math.min(width - 32, n.x));
+    n.y = Math.max(32, Math.min(height - 32, n.y));
+  }
+  
   drawTopo();
+
+  // Camera Spring Physics
+  const [z, zv] = applySpring(topo.zoom, topo.zoomV, topo.targetZoom, 1.0, 200.0, 20.0);
+  topo.zoom = z; topo.zoomV = zv;
+  const [px, pxv] = applySpring(topo.panX, topo.panVX, topo.targetPanX, 1.0, 200.0, 20.0);
+  topo.panX = px; topo.panVX = pxv;
+  const [py, pyv] = applySpring(topo.panY, topo.panVY, topo.targetPanY, 1.0, 200.0, 20.0);
+  topo.panY = py; topo.panVY = pyv;
+
+  const camSettled = Math.abs(topo.targetZoom - topo.zoom) < 0.001 && Math.abs(topo.zoomV) < 0.001 &&
+                     Math.abs(topo.targetPanX - topo.panX) < 0.01 && Math.abs(topo.panVX) < 0.01 &&
+                     Math.abs(topo.targetPanY - topo.panY) < 0.01 && Math.abs(topo.panVY) < 0.01;
+
+  let allNodesSettled = true;
+  for (let i = 0; i < nLen; i++) {
+    if (Math.abs(nodes[i].scale - 1.0) > 0.01 || Math.abs(nodes[i].scaleV) > 0.01) {
+      allNodesSettled = false; break;
+    }
+  }
+
+  if (nLen && totalSpeed / nLen < 0.02 && camSettled && allNodesSettled) {
+    topo.animating = false;
+    return;
+  }
   requestAnimationFrame(tickTopo);
 }
 
 function drawTopo() {
-  const { ctx, nodes, edges, width, height, hover } = topo;
-  if (!ctx) return;
-  ctx.clearRect(0, 0, width, height);
-  // edges
-  edges.forEach(({ src, dst, weight, scanTypes }) => {
+  const { ctx, nodes, edges, width, height, hover, zoom, panX, panY } = topo;
+  if (!ctx || !width || !height) return;
+  const dpr = devicePixelRatio || 1;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, width * dpr, height * dpr);
+  ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, dpr * zoom * panX, dpr * zoom * panY);
+
+  // Compute Adjacency for Focus State
+  const hoverAdjacency = new Set();
+  if (hover !== null && hover >= 0) {
+    hoverAdjacency.add(hover);
+    edges.forEach(({ src, dst }) => {
+      if (src === hover) hoverAdjacency.add(dst);
+      if (dst === hover) hoverAdjacency.add(src);
+    });
+  }
+
+  // Draw edges
+  edges.forEach(({ src, dst, weight }) => {
     const a = nodes[src], b = nodes[dst];
     if (!a || !b) return;
-    ctx.strokeStyle = 'rgba(150,160,180,0.18)';
+    
+    let isHoverEdge = false;
+    if (hover !== null && hover >= 0) {
+      if (src === hover || dst === hover) isHoverEdge = true;
+    }
+    
+    if (hover !== null && !isHoverEdge) {
+      ctx.strokeStyle = 'rgba(150,160,180,0.04)'; // 20% opacity of normal
+    } else if (isHoverEdge) {
+      ctx.strokeStyle = 'rgba(24, 182, 155, 0.8)'; // Vibrant highlight
+    } else {
+      ctx.strokeStyle = 'rgba(150,160,180,0.18)'; // Normal
+    }
+    
     ctx.lineWidth = Math.min(4, 0.5 + Math.log2(weight + 1) * 0.6);
+    
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    
+    if (a.isCluster || b.isCluster) {
+       // Bundled curved edge for clusters
+       const midX = (a.x + b.x) / 2;
+       const midY = (a.y + b.y) / 2 - 40;
+       ctx.quadraticCurveTo(midX, midY, b.x, b.y);
+    } else {
+       ctx.lineTo(b.x, b.y);
+    }
     ctx.stroke();
   });
-  // nodes
-  nodes.forEach((n, i) => {
-    const r = Math.max(4, Math.min(28, 4 + Math.sqrt(n.size) * 0.5));
+
+  // nodes — z-order
+  const order = nodes.map((n, i) => i).sort((a, b) => topoRadius(nodes[b]) - topoRadius(nodes[a]));
+  order.forEach((i) => {
+    const n = nodes[i];
+    const baseR = topoRadius(n);
+    const r = baseR * Math.max(0, n.scale || 0);
+    if (r <= 0.1) return;
+    
+    let opacity = 1.0;
+    if (hover !== null && hover >= 0 && !hoverAdjacency.has(i)) {
+      opacity = 0.2; // Dim non-adjacent nodes
+    }
+    
     ctx.beginPath();
     ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    ctx.globalAlpha = opacity;
     ctx.fillStyle = riskColor(n.riskLevel);
     ctx.fill();
+    ctx.globalAlpha = 1.0;
+    
     if (i === hover) {
       ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2 / zoom;
       ctx.stroke();
     }
   });
-  // labels for hovered node
+
+  // hover ring on top
   if (hover !== null && nodes[hover]) {
     const n = nodes[hover];
-    const r = Math.max(4, Math.min(28, 4 + Math.sqrt(n.size) * 0.5));
-    ctx.font = '11px Inter, system-ui, sans-serif';
-    const label = `${n.label}${n.tool ? ' · ' + n.tool : ''}`;
-    const w = ctx.measureText(label).width + 12;
-    ctx.fillStyle = 'rgba(15,18,25,0.92)';
-    ctx.fillRect(n.x + r + 6, n.y - 12, w, 24);
-    ctx.fillStyle = '#E6EDF7';
-    ctx.fillText(label, n.x + r + 12, n.y + 4);
+    const r = (topoRadius(n) * Math.max(0, n.scale || 0)) + 2;
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.5 / zoom;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+    ctx.stroke();
   }
+  ctx.restore();
 }
 
 async function loadTopology() {
@@ -2267,41 +2393,95 @@ async function loadTopology() {
     return;
   }
   if (empty) empty.style.display = 'none';
-  if (stats) stats.textContent = `${data.nodes.length} nodes · ${data.edges.length} edges`;
-  renderTopoLegend(data.nodes);
 
-  // Layout: sources left, targets right; spread vertically by index
-  const sources = data.nodes.filter((n) => n.type === 'source');
-  const targets = data.nodes.filter((n) => n.type === 'target');
+  let processedNodes = data.nodes;
+  let processedEdges = data.edges;
+
+  // Progressive Disclosure: Edge Bundling / Clustering
+  const THRESHOLD = 50;
+  if (processedNodes.length > THRESHOLD) {
+    const clusterMap = {};
+    const clusters = {};
+    const sources = processedNodes.filter(n => n.type === 'source');
+    const targets = processedNodes.filter(n => n.type === 'target');
+    
+    targets.forEach(t => {
+      const riskCluster = 'cluster_' + t.risk;
+      if (!clusters[riskCluster]) {
+        clusters[riskCluster] = {
+          id: riskCluster, type: 'target', label: `Risk ${t.risk} Target Cluster`,
+          risk: t.risk, size: 0, isCluster: true,
+          tool: 'Clustered Subnet'
+        };
+      }
+      clusters[riskCluster].size += t.size || 1;
+      clusterMap[t.id] = riskCluster;
+    });
+    
+    const newTargets = Object.values(clusters);
+    processedNodes = [...sources, ...newTargets];
+    
+    const newEdges = [];
+    const edgeMap = {};
+    processedEdges.forEach(e => {
+      const dstId = clusterMap[e.target] || e.target;
+      const key = e.source + '_' + dstId;
+      if (!edgeMap[key]) {
+        edgeMap[key] = { source: e.source, target: dstId, weight: 0, scan_types: new Set() };
+        newEdges.push(edgeMap[key]);
+      }
+      edgeMap[key].weight += e.weight || 1;
+      (e.scan_types || []).forEach(st => edgeMap[key].scan_types.add(st));
+    });
+    newEdges.forEach(e => e.scan_types = Array.from(e.scan_types));
+    processedEdges = newEdges;
+  }
+
+  if (stats) stats.textContent = `${processedNodes.length} nodes · ${processedEdges.length} edges`;
+  renderTopoLegend(processedNodes);
+
+  const sources = processedNodes.filter((n) => n.type === 'source');
+  const targets = processedNodes.filter((n) => n.type === 'target');
   const rect = topo.canvas.getBoundingClientRect();
   topo.width = rect.width; topo.height = rect.height;
   topo.canvas.width = rect.width * devicePixelRatio;
   topo.canvas.height = rect.height * devicePixelRatio;
-  topo.ctx.scale(devicePixelRatio, devicePixelRatio);
+  if (topo.targetZoom !== 1) { topo.targetZoom = 1; topo.targetPanX = 0; topo.targetPanY = 0; }
 
   const nodes = [];
   const idIndex = {};
+  const cx = topo.width / 2;
+  const cy = topo.height / 2;
+
   sources.forEach((n, i) => {
     idIndex[n.id] = nodes.length;
+    const startX = topo.width * 0.20 + (i % 2 ? 60 : 0);
+    const startY = (i + 1) * (topo.height / (sources.length + 1));
+    const dist = Math.sqrt((startX - cx)**2 + (startY - cy)**2);
     nodes.push({
       ...n,
-      x: topo.width * 0.18 + (i % 2 ? 60 : 0),
-      y: (i + 1) * (topo.height / (sources.length + 1)) + (Math.random() - 0.5) * 20,
-      vx: 0, vy: 0, riskLevel: n.risk >= 7 ? 'critical' : n.risk >= 5 ? 'high' : n.risk >= 3 ? 'medium' : 'low',
+      x: startX, y: startY,
+      vx: 0, vy: 0,
+      scale: 0, scaleV: -dist * 0.05, // delay staggered
+      riskLevel: n.risk >= 7 ? 'critical' : n.risk >= 5 ? 'high' : n.risk >= 3 ? 'medium' : 'low',
     });
   });
   targets.forEach((n, i) => {
     if (idIndex[n.id] !== undefined) return;
     idIndex[n.id] = nodes.length;
+    const startX = topo.width * 0.80 + (i % 2 ? -40 : 0);
+    const startY = (i + 1) * (topo.height / (targets.length + 1));
+    const dist = Math.sqrt((startX - cx)**2 + (startY - cy)**2);
     nodes.push({
       ...n,
-      x: topo.width * 0.78 + (i % 2 ? -40 : 0),
-      y: (i + 1) * (topo.height / (targets.length + 1)) + (Math.random() - 0.5) * 20,
-      vx: 0, vy: 0, riskLevel: 'low',
+      x: startX, y: startY,
+      vx: 0, vy: 0,
+      scale: 0, scaleV: -dist * 0.05,
+      riskLevel: 'low',
     });
   });
   topo.nodes = nodes;
-  topo.edges = data.edges
+  topo.edges = processedEdges
     .filter((e) => idIndex[e.source] !== undefined && idIndex[e.target] !== undefined)
     .map((e) => ({ src: idIndex[e.source], dst: idIndex[e.target], weight: e.weight || 1, scanTypes: e.scan_types || [] }));
 
@@ -2332,27 +2512,109 @@ function initTopology() {
   topo.canvas = document.getElementById('canvas-topology');
   if (!topo.canvas) return;
   topo.ctx = topo.canvas.getContext('2d');
+  topo.zoom = 1; topo.panX = 0; topo.panY = 0;
+  topo.zoomV = 0; topo.panVX = 0; topo.panVY = 0;
+  topo.targetZoom = 1; topo.targetPanX = 0; topo.targetPanY = 0;
 
-  // Hover detection (throttled to mousemove)
-  topo.canvas.addEventListener('mousemove', (e) => {
+  const insp = document.getElementById('topo-inspector');
+  const inspTitle = document.getElementById('insp-title');
+  const inspDesc = document.getElementById('insp-desc');
+  const inspConnections = document.getElementById('insp-connections');
+
+  function getCanvasMouse(e) {
     const rect = topo.canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    let found = -1;
+    return { cx: e.clientX - rect.left, cy: e.clientY - rect.top };
+  }
+
+  function hitTestNode(mx, my) {
     for (let i = 0; i < topo.nodes.length; i++) {
       const n = topo.nodes[i];
-      const r = Math.max(4, Math.min(28, 4 + Math.sqrt(n.size) * 0.5)) + 2;
-      if ((mx - n.x) ** 2 + (my - n.y) ** 2 <= r * r) { found = i; break; }
+      const r = (topoRadius(n) * Math.max(0, n.scale || 0) + 2) * topo.zoom;
+      const sx = (n.x + topo.panX) * topo.zoom, sy = (n.y + topo.panY) * topo.zoom;
+      if ((mx - sx) ** 2 + (my - sy) ** 2 <= r * r) return i;
     }
-    if (found !== topo.hover) { topo.hover = found; topo.canvas.style.cursor = found >= 0 ? 'pointer' : 'default'; }
+    return -1;
+  }
+
+  function updateTooltip(idx) {
+    if (idx < 0 || !topo.nodes[idx]) { 
+      if (insp) insp.style.display = 'none'; 
+      return; 
+    }
+    const n = topo.nodes[idx];
+    if (insp) {
+      inspTitle.textContent = n.label;
+      inspDesc.textContent = n.tool || 'Unknown';
+      
+      let outCount = 0;
+      let inCount = 0;
+      topo.edges.forEach(edge => {
+        if (edge.src === idx) outCount++;
+        if (edge.dst === idx) inCount++;
+      });
+      inspConnections.innerHTML = `<div>Outgoing: ${outCount}</div><div>Incoming: ${inCount}</div>`;
+      
+      insp.style.display = 'block';
+    }
+  }
+
+  topo.canvas.addEventListener('mousemove', (e) => {
+    if (topo.isPanning) {
+      const dx = e.clientX - topo.panStartX;
+      const dy = e.clientY - topo.panStartY;
+      topo.targetPanX = topo.panStartPanX + dx / topo.targetZoom;
+      topo.targetPanY = topo.panStartPanY + dy / topo.targetZoom;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) topo.panMoved = true;
+      return;
+    }
+    const { cx, cy } = getCanvasMouse(e);
+    const found = hitTestNode(cx, cy);
+    if (found !== topo.hover) { 
+      topo.hover = found; 
+      topo.canvas.style.cursor = found >= 0 ? 'pointer' : 'default';
+      updateTooltip(found);
+      
+      if (!topo.animating) {
+        topo.animating = true;
+        requestAnimationFrame(tickTopo);
+      }
+    }
+  });
+  topo.canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const { cx, cy } = getCanvasMouse(e);
+    if (hitTestNode(cx, cy) < 0) {
+      topo.isPanning = true;
+      topo.panMoved = false;
+      topo.panStartX = e.clientX;
+      topo.panStartY = e.clientY;
+      topo.panStartPanX = topo.targetPanX;
+      topo.panStartPanY = topo.targetPanY;
+      topo.canvas.style.cursor = 'grabbing';
+    }
+  });
+  document.addEventListener('mouseup', () => {
+    if (topo.isPanning) {
+      topo.isPanning = false;
+      topo.canvas.style.cursor = topo.hover >= 0 ? 'pointer' : 'default';
+    }
   });
   topo.canvas.addEventListener('click', () => {
+    if (topo.panMoved) return;
     if (topo.hover != null && topo.hover >= 0) {
       const n = topo.nodes[topo.hover];
       if (n && n.type === 'source') {
         document.getElementById('tl-ip-input').value = n.id;
         location.hash = '#sec-source-timeline';
-        loadTimeline();
+        if (typeof loadTimeline === 'function') loadTimeline();
       }
+    }
+  });
+  topo.canvas.addEventListener('dblclick', () => {
+    topo.targetZoom = 1; topo.targetPanX = 0; topo.targetPanY = 0;
+    if (!topo.animating) {
+      topo.animating = true;
+      requestAnimationFrame(tickTopo);
     }
   });
   window.addEventListener('resize', () => {
@@ -2360,6 +2622,7 @@ function initTopology() {
   });
 
   document.getElementById('btn-topo-refresh')?.addEventListener('click', loadTopology);
+  loadTopology();
 }
 
 // ---- Section-aware loading: load the right panel when user navigates -----

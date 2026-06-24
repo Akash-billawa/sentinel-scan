@@ -776,11 +776,11 @@
         <div class="card">
           <div class="card-hd">
             <div>
-              <div class="card-title">Network Topology</div>
-              <div class="card-sub">Source → target graph · node size = packet count · color = risk</div>
+              <div class="card-title text-heading">Network Topology</div>
+              <div class="card-sub text-body">Source → target graph · node size = packet count · color = risk</div>
             </div>
             <div class="card-actions" style="display:flex;align-items:center;gap:6px">
-              <span id="topo-stats" style="font-size:11.5px;color:var(--c-text-4)"></span>
+              <span id="topo-stats" class="text-label"></span>
               <button id="btn-topo-refresh" class="btn btn-sm btn-ghost btn-icon" aria-label="Refresh topology">
                 <svg width="13" height="13"><use href="#icon-refresh"/></svg>
               </button>
@@ -789,11 +789,19 @@
           <div style="height:520px;position:relative;background:var(--c-surface-2);border:1px solid var(--c-border);border-radius:var(--r-md);overflow:hidden">
             <canvas id="canvas-topology" aria-label="Network topology graph" style="display:block;width:100%;height:100%"></canvas>
             <div id="topo-empty" class="tbl-empty" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;flex-direction:column">
-              <div class="tbl-empty-title">No topology data yet</div>
-              <div>Start the engine to populate source → target relationships.</div>
+              <div class="tbl-empty-title text-heading">No topology data yet</div>
+              <div class="text-body">Start the engine to populate source → target relationships.</div>
+            </div>
+            
+            <!-- Floating Inspector Panel -->
+            <div id="topo-inspector" class="floating-panel" style="display:none;top:24px;right:24px;">
+              <div id="insp-title" class="text-heading" style="margin-bottom:8px"></div>
+              <div id="insp-desc" class="text-body" style="margin-bottom:8px"></div>
+              <div class="text-label" style="color:var(--c-accent)">Connections</div>
+              <div id="insp-connections" class="text-body"></div>
             </div>
           </div>
-          <div id="topo-legend" style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--c-text-3)"></div>
+          <div id="topo-legend" class="text-body" style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;"></div>
         </div>
       </section>
 
