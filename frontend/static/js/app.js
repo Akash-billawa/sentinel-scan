@@ -5,34 +5,66 @@
  */
 'use strict';
 
+let _consecutiveFailures = 0;
+function handleNetworkError(err) {
+  _consecutiveFailures++;
+  if (_consecutiveFailures >= 2) {
+    document.getElementById('server-offline-overlay').style.display = 'flex';
+  }
+  console.error("Network error:", err);
+  return { ok: false, error: 'Network error: ' + err.message };
+}
+function handleNetworkSuccess() {
+  if (_consecutiveFailures > 0) {
+    _consecutiveFailures = 0;
+    document.getElementById('server-offline-overlay').style.display = 'none';
+  }
+}
+
 const API = {
   async get(path) {
-    const r = await fetch(path, { credentials: 'include' });
-    if (r.status === 401) {
-      const next = encodeURIComponent(location.pathname + location.search);
-      location.replace('/login?next=' + next);
-      return null;
+    try {
+      const r = await fetch(path, { credentials: 'include' });
+      handleNetworkSuccess();
+      if (r.status === 401) {
+        const next = encodeURIComponent(location.pathname + location.search);
+        location.replace('/login?next=' + next);
+        return null;
+      }
+      const text = await r.text();
+      try {
+        return text ? JSON.parse(text) : null;
+      } catch (e) {
+        console.error(`Failed to parse JSON for GET ${path}. Status: ${r.status}. Raw response:`, text.substring(0, 200));
+        return { ok: false, error: `Server error ${r.status}` };
+      }
+    } catch (err) {
+      return handleNetworkError(err);
     }
-    return r.json();
   },
   async post(path, body) {
-    const r = await fetch(path, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (r.status === 401) {
-      const next = encodeURIComponent(location.pathname + location.search);
-      location.replace('/login?next=' + next);
-      return { ok: false, error: 'auth required' };
-    }
-    const text = await r.text();
     try {
-      return JSON.parse(text);
-    } catch (e) {
-      console.error("Failed to parse JSON. Raw response:", text);
-      throw e;
+      const r = await fetch(path, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      handleNetworkSuccess();
+      if (r.status === 401) {
+        const next = encodeURIComponent(location.pathname + location.search);
+        location.replace('/login?next=' + next);
+        return { ok: false, error: 'auth required' };
+      }
+      const text = await r.text();
+      try {
+        return text ? JSON.parse(text) : {};
+      } catch (e) {
+        console.error(`Failed to parse JSON for POST ${path}. Status: ${r.status}. Raw response:`, text.substring(0, 200));
+        return { ok: false, error: `Server error ${r.status}` };
+      }
+    } catch (err) {
+      return handleNetworkError(err);
     }
   },
 };
@@ -1824,6 +1856,15 @@ function scrollSelectedIntoView() {
 // Boot
 // ---------------------------------------------------------------------------
 function boot() {
+  // Always start at the top "Stats" section on open/reload
+  if ('scrollRestoration' in history) {
+    history.scrollRestoration = 'manual';
+  }
+  window.scrollTo(0, 0);
+  if (location.hash) {
+    history.replaceState(null, null, window.location.pathname + window.location.search);
+  }
+
   console.log(
     '%cSentinelScan AI %cdashboard initialized',
     'color:#22D3EE;font-weight:bold;font-size:13px',

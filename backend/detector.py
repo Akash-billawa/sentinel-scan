@@ -23,6 +23,7 @@ periodic evaluator runs on a timer thread.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import threading
@@ -648,13 +649,35 @@ class DetectionEngine:
         }
 
         # Thresholds: rate, port sweep, host sweep.
+        # For TCP, only SYN-only packets are "probes" — ACK, PSH+ACK, SYN+ACK
+        # are established traffic, not reconnaissance.  Count probe-only
+        # destinations and ports so that browser/cloud false positives
+        # (which have zero or one SYN) don't inflate the trip counters.
         rate = signals["rate"]
+        syn_probe_targets = {p.destination_ip for p in packets_snapshot
+                             if p.flags.get("SYN") and not p.flags.get("ACK")}
+        syn_probe_ports = {p.destination_port for p in packets_snapshot
+                           if p.flags.get("SYN") and not p.flags.get("ACK")
+                           and p.destination_port}
+        syn_probe_rate = syn_pkts / max(
+            (packets_snapshot[-1].timestamp - packets_snapshot[0].timestamp).total_seconds(), 0.5
+        ) if syn_pkts else 0.0
         tripped = []
-        if rate >= s.rate_threshold:
+        # For rate: if TCP is present, use SYN-probe rate (established
+        # traffic shouldn't inflate the counter); for pure UDP/ICMP, use
+        # the total-packet rate since there's no handshake to distinguish.
+        if (has_tcp and syn_probe_rate >= s.rate_threshold
+            or not has_tcp and rate >= s.rate_threshold):
             tripped.append("rate")
-        if len(unique_ports) >= s.portsweep_threshold:
+        # For port sweep: use SYN-probe ports when TCP is active.
+        # Pure established TCP (no SYN at all) doesn't trip — that's
+        # application data, not a probe.
+        if (has_tcp and syn_probe_ports and len(syn_probe_ports) >= s.portsweep_threshold
+            or not has_tcp and len(unique_ports) >= s.portsweep_threshold):
             tripped.append("port_sweep")
-        if len(unique_targets) >= s.hostsweep_threshold:
+        # For host sweep: same SYN-probe-based logic as port sweep.
+        if (has_tcp and syn_probe_targets and len(syn_probe_targets) >= s.hostsweep_threshold
+            or not has_tcp and len(unique_targets) >= s.hostsweep_threshold):
             tripped.append("host_sweep")
         # Special: low-volume but unmistakable signatures still trigger.
         if signals["uses_ecn"] and has_tcp and len(unique_ports) >= 3:
@@ -668,23 +691,86 @@ class DetectionEngine:
         if not tripped:
             return
 
-        # --- False-positive suppression: volume ≠ reconnaissance ---
-        _has_strong_scan_signal = (
-            "ecn_probe" in tripped
-            or "port_sweep" in tripped
-            or "rule_match" in tripped
-            or signals["uses_ecn"]
-            or _flags_set(flags_seen, ["FIN", "PSH", "URG"])  # Xmas
-            or (_flags_set(flags_seen, ["FIN"]) and not flags_seen.get("SYN") and not flags_seen.get("ACK"))  # FIN scan
-            or (not any(flags_seen.values()))  # NULL scan
-        )
-        if not _has_strong_scan_signal and len(unique_ports) <= 3:
+        # --- Single-port, single-target burst suppression: a high-rate
+        #     burst to ONE port on ONE host is application data (WebRTC,
+        #     gaming, NAT traversal, VoIP calls), not reconnaissance.
+        #     Real scanners always probe multiple ports or hosts. ---
+        if len(unique_targets) == 1 and len(unique_ports) == 1:
             log.debug(
-                "Suppressed non-recon traffic from %s: "
-                "%d port(s), %d target(s) — few ports = session/tunnel, not scan",
-                source_ip, len(unique_ports), len(unique_targets),
+                "Suppressed single-target single-port burst from %s: "
+                "%d packets to %s:%d at %.1f pkt/sec — app data, not scan",
+                source_ip, len(packets_snapshot),
+                next(iter(unique_targets)), next(iter(unique_ports)),
+                signals["rate"],
             )
             return
+
+        # --- Zero SYN probes suppression: if NO SYN-only packets exist
+        #     in a TCP window, every packet is an established connection
+        #     (ACK, SYN+ACK, PSH+ACK).  No connection attempts = no scan,
+        #     regardless of how many targets or ports are involved.
+        #     Catches browsers checking multiple services, Windows
+        #     Defender, cloud client heartbeats, etc. ---
+        if syn_pkts == 0 and has_tcp and len(packets_snapshot) >= 5:
+            log.debug(
+                "Suppressed zero-SYN traffic from %s: "
+                "%d TCP packets to %d target(s) — all established connections",
+                source_ip, len(packets_snapshot), len(unique_targets),
+            )
+            return
+
+        # --- mDNS / local discovery suppression: traffic to the mDNS
+        #     multicast address 224.0.0.251:5353 is Apple Bonjour, Android
+        #     device discovery, Chromecast, Smart TV, etc., not scanning.
+        #     If the only non-multicast target is a single LAN device and
+        #     overall volume is low, it's benign local discovery. ---
+        _has_mdns = any(
+            p.destination_ip == "224.0.0.251" and p.destination_port == 5353
+            for p in packets_snapshot
+        )
+        if _has_mdns:
+            _non_mdns_targets = {
+                p.destination_ip for p in packets_snapshot
+                if p.destination_ip != "224.0.0.251"
+            }
+            if len(_non_mdns_targets) <= 2 and len(packets_snapshot) <= 60:
+                log.debug(
+                    "Suppressed mDNS/local discovery traffic from %s: "
+                    "%d target(s) incl. 224.0.0.251, %d packets",
+                    source_ip, len(unique_targets), len(packets_snapshot),
+                )
+                return
+
+        # --- Private-LAN discovery suppression: low-volume traffic
+        #     confined to RFC1918 private addresses (optionally plus
+        #     multicast) is almost always security/AV software checking
+        #     nearby devices, phone discovery, router monitoring, or
+        #     other benign LAN activity — not reconnaissance.
+        #     Works for both UDP and TCP (SYN,ACK responses to service
+        #     discovery probes are not real scans). ---
+        if (
+            len(packets_snapshot) < 100
+            and signals["rate"] < 10
+        ):
+            _all_private = True
+            for p in packets_snapshot:
+                try:
+                    addr = ipaddress.ip_address(p.destination_ip)
+                    if not (addr.is_private or addr.is_multicast):
+                        _all_private = False
+                        break
+                except ValueError:
+                    _all_private = False
+                    break
+            if _all_private:
+                proto = "UDP" if not has_tcp else "TCP"
+                log.debug(
+                    "Suppressed private-LAN discovery traffic from %s: "
+                    "%d %s packets to %d port(s) at %.1f pkt/sec",
+                    source_ip, len(packets_snapshot), proto,
+                    len(unique_ports), signals["rate"],
+                )
+                return
 
         # Skip cooldown window for same scan_type (preliminary check).
         classification = classify(signals)

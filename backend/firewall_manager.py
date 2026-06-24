@@ -472,88 +472,85 @@ class FirewallManager:
                 return BlockResult.ALREADY_BLOCKED
 
         rule_name = f"SentinelScan Block {ip}"
-        try:
-            backend = get_backend()
-            # Phase 1: apply. Backend now returns (ok, diag) so we can
-            # surface the exact command/rc/stderr on the dashboard row.
-            applied, diag = backend.apply_block(ip, rule_name, direction)
+        
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        
+        # Optimistically record the block immediately
+        rule = FirewallRule(
+            ip=ip, direction=direction, action="block",
+            rule_name=rule_name, created_at=now.isoformat() + "Z",
+            reason=reason,
+        )
+        with self._lock:
+            self._blocked_ips[ip] = rule
 
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+        def _do_block():
+            try:
+                backend = get_backend()
+                applied, diag = backend.apply_block(ip, rule_name, direction)
 
-            # Phase 2: verify (spec #1). ``apply_block`` returning ok=True
-            # only means the OS accepted the command — verify_block proves
-            # the rule is actually present.
-            verified = False
-            verify_detail = "verification skipped (apply_block did not report success)"
-            if applied:
-                verified, verify_detail = backend.verify_block(ip, rule_name)
+                verified = False
+                verify_detail = "verification skipped (apply_block did not report success)"
+                if applied:
+                    verified, verify_detail = backend.verify_block(ip, rule_name)
 
-            status = (
-                EnforcementStatus.VERIFIED if verified
-                else EnforcementStatus.FAILED
-            )
-            failure_reason = None if verified else verify_detail
+                status = (
+                    EnforcementStatus.VERIFIED if verified
+                    else EnforcementStatus.FAILED
+                )
+                failure_reason = None if verified else verify_detail
 
-            rule = FirewallRule(
-                ip=ip, direction=direction, action="block",
-                rule_name=rule_name, created_at=now.isoformat() + "Z",
-                reason=reason,
-            )
-            with self._lock:
-                self._blocked_ips[ip] = rule
+                # Persist with verification + apply-block diagnostics.
+                _save_to_db(
+                    ip, direction, "block", rule_name, reason,
+                    status=status.value, backend=backend.name,
+                    verified_at=now if verified else None,
+                    failure_reason=failure_reason,
+                    apply_exit_code=diag.get("apply_exit_code"),
+                    apply_stdout=diag.get("apply_stdout", ""),
+                    apply_stderr=diag.get("apply_stderr", ""),
+                    apply_exception=diag.get("apply_exception", ""),
+                    apply_command=diag.get("apply_command", ""),
+                    direct_apply_command=diag.get("direct_apply_command", ""),
+                    direct_apply_exit_code=diag.get("direct_apply_exit_code"),
+                    direct_apply_stdout=diag.get("direct_apply_stdout", ""),
+                    direct_apply_stderr=diag.get("direct_apply_stderr", ""),
+                    direct_apply_exception=diag.get("direct_apply_exception", ""),
+                    fallback_apply_command=diag.get("fallback_apply_command", ""),
+                    fallback_apply_exit_code=diag.get("fallback_apply_exit_code"),
+                    fallback_apply_stdout=diag.get("fallback_apply_stdout", ""),
+                    fallback_apply_stderr=diag.get("fallback_apply_stderr", ""),
+                    fallback_apply_exception=diag.get("fallback_apply_exception", ""),
+                    last_attempt_path=diag.get("last_attempt_path", ""),
+                )
+                _audit_block_decision(ip, "block", decision_source, reason, extra={
+                    "backend": backend.name,
+                    "applied": applied,
+                    "verified": verified,
+                    "status": status.value,
+                    "verify_detail": verify_detail if not verified else "",
+                    "apply_exit_code": diag.get("apply_exit_code"),
+                })
+                
+                if verified:
+                    log.info("Blocked+VERIFIED IP %s via %s (source=%s)", ip, backend.name, decision_source)
+                elif applied:
+                    log.warning("Block for %s applied but VERIFICATION FAILED: %s", ip, verify_detail)
+                else:
+                    log.warning("Block for %s did NOT apply via %s: %s", ip, backend.name, verify_detail)
+            
+            except Exception as exc:
+                log.error("Failed to block IP %s: %s", ip, exc)
+                _audit_block_decision(ip, "block_failed", decision_source, reason, extra={
+                    "error": str(exc),
+                })
+                # If it completely failed, remove the optimistic lock
+                with self._lock:
+                    self._blocked_ips.pop(ip, None)
 
-            # Persist with verification + apply-block diagnostics.
-            _save_to_db(
-                ip, direction, "block", rule_name, reason,
-                status=status.value, backend=backend.name,
-                verified_at=now if verified else None,
-                failure_reason=failure_reason,
-                apply_exit_code=diag.get("apply_exit_code"),
-                apply_stdout=diag.get("apply_stdout", ""),
-                apply_stderr=diag.get("apply_stderr", ""),
-                apply_exception=diag.get("apply_exception", ""),
-                apply_command=diag.get("apply_command", ""),
-                direct_apply_command=diag.get("direct_apply_command", ""),
-                direct_apply_exit_code=diag.get("direct_apply_exit_code"),
-                direct_apply_stdout=diag.get("direct_apply_stdout", ""),
-                direct_apply_stderr=diag.get("direct_apply_stderr", ""),
-                direct_apply_exception=diag.get("direct_apply_exception", ""),
-                fallback_apply_command=diag.get("fallback_apply_command", ""),
-                fallback_apply_exit_code=diag.get("fallback_apply_exit_code"),
-                fallback_apply_stdout=diag.get("fallback_apply_stdout", ""),
-                fallback_apply_stderr=diag.get("fallback_apply_stderr", ""),
-                fallback_apply_exception=diag.get("fallback_apply_exception", ""),
-                last_attempt_path=diag.get("last_attempt_path", ""),
-            )
-            _audit_block_decision(ip, "block", decision_source, reason, extra={
-                "backend": backend.name,
-                "applied": applied,
-                "verified": verified,
-                "status": status.value,
-                "verify_detail": verify_detail if not verified else "",
-                "apply_exit_code": diag.get("apply_exit_code"),
-            })
-            if verified:
-                log.info("Blocked+VERIFIED IP %s via %s (source=%s)",
-                         ip, backend.name, decision_source)
-                return BlockResult.APPLIED
-            if applied:
-                # OS accepted the command but verification failed — surface
-                # as RECORDED_ONLY so the dashboard shows the FAILED state.
-                log.warning("Block for %s applied but VERIFICATION FAILED: %s",
-                            ip, verify_detail)
-                return BlockResult.RECORDED_ONLY
-            log.warning("Block for %s did NOT apply via %s: %s",
-                        ip, backend.name, verify_detail)
-            return BlockResult.RECORDED_ONLY
-
-        except Exception as exc:
-            log.error("Failed to block IP %s: %s", ip, exc)
-            _audit_block_decision(ip, "block_failed", decision_source, reason, extra={
-                "error": str(exc),
-            })
-            return BlockResult.FAILED
+        threading.Thread(target=_do_block, daemon=True).start()
+        return BlockResult.APPLIED
 
     def unblock_ip(self, ip: str, decision_source: str = "operator") -> BlockResult:
         """Remove a block rule via the configured backend."""
@@ -565,30 +562,38 @@ class FirewallManager:
             if ip not in self._blocked_ips:
                 log.info("IP %s is not blocked", ip)
                 return BlockResult.ALREADY_ABSENT
-            rule = self._blocked_ips[ip]
+            # Optimistically remove it
+            rule = self._blocked_ips.pop(ip)
 
-        try:
-            backend = get_backend()
-            result = backend.remove_block(ip, rule.rule_name)
-            # Spec #4: sync SentinelScan state with OS firewall state.
-            if result in (BlockResult.UNAPPLIED, BlockResult.PARTIAL, BlockResult.ALREADY_ABSENT):
+        def _do_unblock():
+            try:
+                backend = get_backend()
+                result = backend.remove_block(ip, rule.rule_name)
+                # Spec #4: sync SentinelScan state with OS firewall state.
+                if result not in (BlockResult.UNAPPLIED, BlockResult.PARTIAL, BlockResult.ALREADY_ABSENT):
+                    # It failed to unblock. Put it back in memory.
+                    with self._lock:
+                        self._blocked_ips[ip] = rule
+                else:
+                    _remove_from_db(ip)
+                    
+                log.info("Unblocked IP %s via %s (source=%s, result=%s)",
+                         ip, backend.name, decision_source, result.value)
+                _audit_block_decision(ip, "unblock", decision_source, rule.reason, extra={
+                    "backend": backend.name,
+                    "result": result.value,
+                })
+            except Exception as exc:
+                log.error("Failed to unblock IP %s: %s", ip, exc)
+                _audit_block_decision(ip, "unblock_failed", decision_source, rule.reason, extra={
+                    "error": str(exc),
+                })
+                # If it completely failed, put the optimistic lock back
                 with self._lock:
-                    self._blocked_ips.pop(ip, None)
-                _remove_from_db(ip)
-            log.info("Unblocked IP %s via %s (source=%s, result=%s)",
-                     ip, backend.name, decision_source, result.value)
-            _audit_block_decision(ip, "unblock", decision_source, rule.reason, extra={
-                "backend": backend.name,
-                "result": result.value,
-            })
-            return result
+                    self._blocked_ips[ip] = rule
 
-        except Exception as exc:
-            log.error("Failed to unblock IP %s: %s", ip, exc)
-            _audit_block_decision(ip, "unblock_failed", decision_source, rule.reason, extra={
-                "error": str(exc),
-            })
-            return BlockResult.FAILED
+        threading.Thread(target=_do_unblock, daemon=True).start()
+        return BlockResult.UNAPPLIED
 
     def is_blocked(self, ip: str) -> bool:
         """Check if an IP is currently blocked."""
@@ -605,16 +610,22 @@ class FirewallManager:
 def _is_elevated() -> bool:
     """Return True when the current process runs as Administrator.
 
-    Cheap probe: ``net session`` succeeds only for accounts in the
-    local Administrators group (TokenElevationType == Full). If it fails
-    or times out, treat as non-elevated.
+    Uses a PowerShell command that checks the Windows identity token
+    directly — unlike ``net session``, this does NOT depend on the
+    Server service (LanmanServer) being running.
     """
     try:
         r = subprocess.run(
-            ["net", "session"],
+            [
+                "powershell", "-NoProfile",
+                "-Command",
+                "[Security.Principal.WindowsPrincipal]::new("
+                "[Security.Principal.WindowsIdentity]::GetCurrent()"
+                ").IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)"
+            ],
             capture_output=True, text=True, timeout=5,
         )
-        return r.returncode == 0
+        return r.returncode == 0 and r.stdout.strip() == "True"
     except Exception:
         return False
 
@@ -664,7 +675,7 @@ def _powershell_run(ps_script: str, timeout: int = 30) -> tuple:
         "powershell",
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
-        "-Command", ps_script,
+        "-Command", f"$ProgressPreference = 'SilentlyContinue'; {ps_script}",
     ]
     log.debug("firewall._powershell_run CMD=%s", cmd)
     try:
@@ -818,57 +829,57 @@ def _block_windows(ip: str, rule_name: str, direction: str) -> tuple:
         "firewall._block_windows START ip=%s rule=%r dir=%s elevated=%s",
         ip, rule_name, direction, _is_elevated(),
     )
-    safe_ip = _sanitize_for_powershell(ip)
-    safe_rule_name = _sanitize_for_powershell(rule_name)
+    safe_ip = ip.replace('"', '')
+    safe_rule_name = rule_name.replace('"', '')
 
-    ps_script = (
-        "$ErrorActionPreference = 'Stop'; "
-        "Get-NetFirewallRule -DisplayName '" + safe_rule_name + "' "
-        "-ErrorAction SilentlyContinue | Remove-NetFirewallRule "
-        "-ErrorAction SilentlyContinue; "
-        "$rule = New-NetFirewallRule "
-        "-DisplayName '" + safe_rule_name + "' "
-        "-Direction Inbound -RemoteAddress " + safe_ip + " "
-        "-Action Block -Description 'SentinelScan IPS auto-block'; "
-        "Write-Output ('OK ' + $rule.Name)"
-    )
-    diag["apply_command"] = ps_cmd_repr
-    diag["direct_apply_command"] = ps_cmd_repr
+    cmd_del = ["netsh", "advfirewall", "firewall", "delete", "rule", f'name={safe_rule_name}']
+    cmd_add = ["netsh", "advfirewall", "firewall", "add", "rule", f'name={safe_rule_name}', "dir=in", "action=block", f'remoteip={safe_ip}']
+    
+    diag["apply_command"] = " ".join(cmd_add)
+    diag["direct_apply_command"] = " ".join(cmd_add)
     diag["last_attempt_path"] = "direct"
-    log.debug("firewall._block_windows New-NetFirewallRule SCRIPT=%s", ps_script)
+    
+    try:
+        # Ignore errors from delete, rule may not exist
+        subprocess.run(cmd_del, capture_output=True, timeout=5)
+        
+        proc = subprocess.run(cmd_add, capture_output=True, text=True, timeout=5)
+        rc = proc.returncode
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
+    except Exception as exc:
+        rc = -1
+        stdout = ""
+        stderr = str(exc)
 
-    rc, stdout, stderr = _powershell_run(ps_script, timeout=30)
     diag["apply_exit_code"] = rc
-    diag["apply_stdout"] = stdout or ""
-    diag["apply_stderr"] = stderr or ""
+    diag["apply_stdout"] = stdout
+    diag["apply_stderr"] = stderr
     diag["direct_apply_exit_code"] = rc
-    diag["direct_apply_stdout"] = stdout or ""
-    diag["direct_apply_stderr"] = stderr or ""
+    diag["direct_apply_stdout"] = stdout
+    diag["direct_apply_stderr"] = stderr
     log.debug(
-        "firewall._block_windows powershell rc=%s stdout=%r stderr=%r",
-        rc, str(stdout or "")[:500], str(stderr or "")[:500],
+        "firewall._block_windows direct rc=%s stdout=%r stderr=%r",
+        rc, str(stdout)[:500], str(stderr)[:500],
+
     )
-    if rc == 0 and stdout.strip().startswith("OK "):
+    if rc == 0:
         log.info("firewall._block_windows OK rule=%r ip=%s", rule_name, ip)
         return (True, diag)
 
-    # Direct call failed — try schtasks SYSTEM fallback. The diagnostic
-    # surface for the direct attempt stays in direct_apply_* — we don't
-    # clobber it. The apply_* mirror is overwritten to reflect the last
-    # attempt (= the fallback) so the row tells the truth about which
-    # command's result determined the final status.
+    # Direct call failed — try schtasks SYSTEM fallback.
     log.warning(
-        "firewall._block_windows direct PowerShell failed "
+        "firewall._block_windows direct netsh failed "
         "(rc=%s stderr=%r) — falling back to schtasks SYSTEM",
         rc, stderr.strip(),
     )
     task_name = "SentinelScan-Block-" + ip.replace(".", "-")
+    fallback_script = f"netsh advfirewall firewall add rule name=\"{safe_rule_name}\" dir=in action=block remoteip=\"{safe_ip}\""
     fallback_command_repr = (
-        "schtasks SYSTEM -> powershell -NoProfile -ExecutionPolicy Bypass "
-        "-File <SentinelScan-Block.ps1>  (script: " + ps_script + ")"
+        "schtasks SYSTEM -> netsh advfirewall add rule"
     )
     try:
-        rc2, out2, err2 = _run_via_schtasks(task_name, ps_script, wait_seconds=10.0)
+        rc2, out2, err2 = _run_via_schtasks(task_name, fallback_script, wait_seconds=10.0)
         # Mirror the schtasks result into BOTH apply_* (last attempt) and
         # fallback_apply_* (preserved diagnostic of the fallback itself).
         diag["apply_exit_code"] = rc2
@@ -910,34 +921,25 @@ def _verify_windows(rule_name: str, ip: str = "") -> tuple:
     set actually contains it — a stale rule with the same DisplayName but
     a different address is still a failure.
     """
-    safe_name = _sanitize_for_powershell(rule_name)
-    safe_ip = _sanitize_for_powershell(ip) if ip else ""
-    if safe_ip:
-        ps = (
-            "$rule = Get-NetFirewallRule -DisplayName '" + safe_name + "' "
-            "-ErrorAction SilentlyContinue; "
-            "if ($rule -eq $null) { 'ABSENT' } else { "
-            "  $addr = (Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule "
-            "           -ErrorAction SilentlyContinue).RemoteAddress; "
-            "  if ('" + safe_ip + "' -in $addr) { 'OK' } "
-            "  else { 'ADDR_MISMATCH:' + ($addr -join ',') } "
-            "}"
-        )
-    else:
-        ps = (
-            "if ((Get-NetFirewallRule -DisplayName '" + safe_name + "' "
-            "-ErrorAction SilentlyContinue) -ne $null) { 'OK' } else { 'ABSENT' }"
-        )
-    rc, stdout, stderr = _powershell_run(ps, timeout=15)
-    out = stdout.strip()
-    if rc != 0:
-        return (False, "powershell rc=" + str(rc) + " stderr=" + repr(stderr.strip()))
-    if out == "OK":
-        return (True, "verified: '" + rule_name + "' present" + (", remote=" + ip if ip else ""))
-    if out.startswith("ADDR_MISMATCH"):
-        rest = out.split(":", 1)[1]
-        return (False, "rule present but RemoteAddress is " + repr(rest) + ", expected " + repr(ip))
-    return (False, "rule '" + rule_name + "' not found in Windows Defender (stdout=" + repr(out) + ")")
+    safe_name = rule_name.replace('"', '')
+    cmd = ["netsh", "advfirewall", "firewall", "show", "rule", f'name={safe_name}']
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        rc = proc.returncode
+        out = proc.stdout.strip()
+    except Exception as exc:
+        return (False, f"netsh exception: {exc}")
+
+    if rc != 0 or "No rules match" in out:
+        return (False, "rule '" + rule_name + "' not found in Windows Defender")
+
+    if ip:
+        # Check if the IP is in the output. netsh output is localized and loose,
+        # but the IP should literally appear in the 'RemoteIP:' or 'Remote Address:' section.
+        if ip not in out:
+            return (False, "rule present but RemoteAddress mismatch (expected " + repr(ip) + ")")
+
+    return (True, "verified: '" + rule_name + "' present" + (", remote=" + ip if ip else ""))
 
 
 def _cleanup_task(task_name: str) -> None:
@@ -952,59 +954,41 @@ def _cleanup_task(task_name: str) -> None:
         log.debug("firewall task cleanup failed for %s: %s", task_name, exc)
 
 def _unblock_windows(rule_name: str) -> BlockResult:
-    """Remove a Windows firewall rule by name.
-
-    Synchronous direct PowerShell call. When the direct call can't remove
-    the rule (the running token lacks the privilege), falls back to
-    schtasks SYSTEM — and waits for the elevated task to complete before
-    returning.
-    """
+    """Remove a Windows firewall rule by name using netsh for speed."""
     log.debug("firewall._unblock_windows START rule=%r elevated=%s",
               rule_name, _is_elevated())
-    safe_rule_name = _sanitize_for_powershell(rule_name)
+    safe_rule_name = rule_name.replace('"', '')
 
-    ps_script = (
-        "$ErrorActionPreference = 'Stop'; "
-        "$existing = Get-NetFirewallRule -DisplayName '" + safe_rule_name + "' "
-        "-ErrorAction SilentlyContinue; "
-        "if ($existing -eq $null) { Write-Output 'ABSENT'; exit 0 }; "
-        "$existing | Remove-NetFirewallRule -ErrorAction Stop; "
-        "$after = Get-NetFirewallRule -DisplayName '" + safe_rule_name + "' "
-        "-ErrorAction SilentlyContinue; "
-        "if ($after -eq $null) { Write-Output 'GONE' } else { Write-Output 'STILL_THERE' }"
-    )
-    rc, stdout, stderr = _powershell_run(ps_script, timeout=20)
-    out = stdout.strip()
-    log.debug("firewall._unblock_windows direct rc=%s stdout=%r stderr=%r",
-              rc, out, stderr.strip())
-
-    if out == "ABSENT":
-        return BlockResult.ALREADY_ABSENT
-    if out == "GONE":
-        return BlockResult.UNAPPLIED
-    if out == "STILL_THERE":
-        # Direct call couldn't remove — try schtasks SYSTEM.
-        log.warning("firewall._unblock_windows direct call left rule present; "
-                    "falling back to schtasks SYSTEM")
-        task_name = "SentinelScan-Unblock-" + rule_name.replace(" ", "-")
-        ps_elev = (
-            "Get-NetFirewallRule -DisplayName '" + safe_rule_name + "' "
-            "-ErrorAction SilentlyContinue | Remove-NetFirewallRule"
-        )
-        cr, _out, err = _run_via_schtasks(task_name, ps_elev, wait_seconds=10.0)
-        if cr != 0:
-            log.error("firewall._unblock_windows schtasks fallback failed: %s", err)
-            return BlockResult.FAILED
-        for _ in range(50):
-            ok, _ = _verify_windows(rule_name, "")
-            if not ok:
-                return BlockResult.UNAPPLIED
-            _time.sleep(0.2)
+    cmd = ["netsh", "advfirewall", "firewall", "delete", "rule", f'name={safe_rule_name}']
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        rc, out, stderr = proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except Exception as exc:
+        log.error("firewall._unblock_windows direct netsh failed: %s", exc)
         return BlockResult.FAILED
 
-    # PowerShell failed outright.
-    log.error("firewall._unblock_windows direct PowerShell failed "
-              "(rc=%s stderr=%r stdout=%r)", rc, stderr.strip(), out)
+    log.debug("firewall._unblock_windows direct rc=%s stdout=%r stderr=%r",
+              rc, out, stderr)
+
+    if rc == 0:
+        if "No rules match" in out:
+            return BlockResult.ALREADY_ABSENT
+        return BlockResult.UNAPPLIED
+
+    # If it failed, it might be due to lack of elevation. Fallback to schtasks (which uses PowerShell).
+    log.warning("firewall._unblock_windows direct call failed (rc=%s); falling back to schtasks SYSTEM", rc)
+    task_name = "SentinelScan-Unblock-" + safe_rule_name.replace(" ", "-")
+    ps_elev = f'netsh advfirewall firewall delete rule name="{safe_rule_name}"'
+    cr, _out, err = _run_via_schtasks(task_name, ps_elev, wait_seconds=10.0)
+    if cr != 0:
+        log.error("firewall._unblock_windows schtasks fallback failed: %s", err)
+        return BlockResult.FAILED
+        
+    for _ in range(50):
+        ok, _ = _verify_windows(rule_name, "")
+        if not ok:
+            return BlockResult.UNAPPLIED
+        _time.sleep(0.2)
     return BlockResult.FAILED
 
 

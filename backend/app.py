@@ -108,6 +108,8 @@ def create_app(settings: Optional[Settings] = None) -> Flask:
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=s.auth_session_hours)
     app.config["TESTING"] = False
 
+    # Removed scapy preloader thread to prevent import deadlocks
+
     # Initialise database
     db.init_db()
     bootstrap_default_admin(s)
@@ -400,21 +402,35 @@ def _register_routes(app: Flask, settings: Settings) -> None:
 
         if mode == "auto":
             from .capture import start_capture
-            capture, actual_mode = start_capture(engine, mode="auto")
-            _capture = capture
-            engine.start(mode=actual_mode, session_name=f"api-{actual_mode}")
-            return jsonify({"ok": True, "mode": actual_mode})
+            try:
+                capture, actual_mode = start_capture(engine, mode="auto")
+                _capture = capture
+                engine.start(mode=actual_mode, session_name=f"api-{actual_mode}")
+                return jsonify({"ok": True, "mode": actual_mode})
+            except Exception as exc:
+                log.exception("Engine auto start failed")
+                return jsonify({"ok": False, "error": str(exc)}), 500
 
-        engine.start(mode=mode, session_name=f"api-{mode}")
+        try:
+            engine.start(mode=mode, session_name=f"api-{mode}")
+        except Exception as exc:
+            log.exception("Engine start failed")
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
-        if mode == "live":
-            _capture = LiveCapture(engine, settings)
-            _capture.start()
-        elif mode == "sim":
-            _capture = SimulatorCapture(engine, settings)
-            _capture.start()
-        else:
-            return jsonify({"ok": False, "error": f"unknown mode: {mode}"}), 400
+        try:
+            if mode == "live":
+                _capture = LiveCapture(engine, settings)
+                if not _capture.start():
+                    raise RuntimeError("Live capture could not start (Npcap / privileges missing?)")
+            elif mode == "sim":
+                _capture = SimulatorCapture(engine, settings)
+                _capture.start()
+            else:
+                return jsonify({"ok": False, "error": f"unknown mode: {mode}"}), 400
+        except Exception as exc:
+            log.exception("Capture start failed")
+            engine.stop()
+            return jsonify({"ok": False, "error": str(exc)}), 500
 
         return jsonify({"ok": True, "mode": mode})
 
@@ -1250,7 +1266,7 @@ def _register_routes(app: Flask, settings: Settings) -> None:
             except ValueError:
                 return jsonify({"ok": False, "error": "invalid since datetime"}), 400
         else:
-            since = datetime.now(timezone.utc) - timedelta(hours=24)
+            since = datetime.utcnow() - timedelta(hours=24)
 
         nodes = {}   # ip -> {id, label, type, size, risk}
         edges = {}   # (src, dst) -> {weight, scan_types}
@@ -1376,7 +1392,14 @@ def main():
         log.info("  [%s] %-28s  %s", marker, ch["name"], detail)
 
     log.info("Starting SentinelScan on %s:%s", s.host, s.port)
-    app.run(host=s.host, port=s.port, debug=False, use_reloader=False)
+    try:
+        app.run(host=s.host, port=s.port, debug=False, use_reloader=False)
+    finally:
+        log.info("Shutting down SentinelScan...")
+        global _capture
+        if _capture:
+            _capture.stop()
+        get_engine().stop()
 
 
 if __name__ == "__main__":

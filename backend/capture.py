@@ -178,14 +178,18 @@ class LiveCapture:
         return True
 
     def stop(self) -> None:
-        for s in self._sniffers:
-            try:
-                s.stop()
-            except Exception as exc:  # pragma: no cover
-                log.debug("sniffer.stop error: %s", exc)
-        self._sniffers.clear()
+        sniffers = self._sniffers
+        self._sniffers = []
         self._running = False
-        log.info("Live capture stopped")
+        def _bg_stop():
+            for s in sniffers:
+                try:
+                    s.stop()
+                except Exception as exc:  # pragma: no cover
+                    log.debug("sniffer.stop error: %s", exc)
+            log.info("Live capture stopped completely")
+        threading.Thread(target=_bg_stop, daemon=True, name="live-capture-stop").start()
+        log.info("Live capture stop initiated")
 
     # -- callback --------------------------------------------------------
 
@@ -519,11 +523,13 @@ class SimulatorCapture:
         self._thread: Optional[threading.Thread] = None
         self._intensity: float = 1.0  # 0 = quiet, 2 = busy
         self._lock = threading.Lock()
+        self._stop_event = threading.Event()
 
     def start(self) -> bool:
         if self._running:
             return True
         self._running = True
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, name="sim-capture", daemon=True)
         self._thread.start()
         log.info("Simulator capture started")
@@ -531,6 +537,7 @@ class SimulatorCapture:
 
     def stop(self) -> None:
         self._running = False
+        self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=2.0)
         log.info("Simulator capture stopped")
@@ -584,7 +591,8 @@ class SimulatorCapture:
                         is_fragment=is_fragment,
                     )
                 )
-                time.sleep(random.uniform(*delays) / max(self._intensity, 0.1))
+                if self._stop_event.wait(random.uniform(*delays) / max(self._intensity, 0.1)):
+                    return
             return
 
         # Distribute packets across targets.
@@ -626,7 +634,8 @@ class SimulatorCapture:
                         is_fragment=is_fragment,
                     )
                 )
-                time.sleep(random.uniform(*delays) / max(self._intensity, 0.1))
+                if self._stop_event.wait(random.uniform(*delays) / max(self._intensity, 0.1)):
+                    return
 
     def _loop(self) -> None:
         # Bootstrap: emit one attack every few seconds, faster when busy.
@@ -640,12 +649,9 @@ class SimulatorCapture:
 
                 # Small inter-attack pause — shorter when busy.
                 pause = random.uniform(0.5, 3.0) / max(intensity, 0.3)
-                # Cap to keep the loop responsive to stop() calls.
                 pause = min(pause, 4.0)
-                slept = 0.0
-                while self._running and slept < pause:
-                    time.sleep(0.2)
-                    slept += 0.2
+                if self._stop_event.wait(pause):
+                    break
             except Exception as exc:  # pragma: no cover
                 log.exception("simulator loop error: %s", exc)
                 time.sleep(1.0)

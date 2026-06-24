@@ -161,7 +161,13 @@
 </head>
 
 <body>
-
+  <!-- Server Disconnected Overlay -->
+  <div id="server-offline-overlay" style="display: none; position: fixed; inset: 0; background: rgba(12, 14, 18, 0.85); backdrop-filter: blur(4px); z-index: 9999; flex-direction: column; align-items: center; justify-content: center; color: white;">
+    <svg width="48" height="48" style="color: #F43F5E; margin-bottom: 16px;"><use href="#icon-alert"/></svg>
+    <h2 style="font-size: 24px; margin: 0 0 8px 0; font-weight: 500;">Server Disconnected</h2>
+    <p style="color: #94A3B8; margin: 0; max-width: 400px; text-align: center;">The backend server is unreachable. Please ensure `python run.py` is running. Trying to reconnect...</p>
+    <div style="margin-top: 24px;" class="loading-ring"><div></div><div></div><div></div><div></div></div>
+  </div>
   <!-- ═══ TOP BAR ═══════════════════════════════════════ -->
   <div class="layout">
     <header class="topbar">
@@ -314,7 +320,7 @@
               </div>
             </div>
             <div id="stat-total" class="stat-value">0</div>
-            <div class="stat-foot">since session start</div>
+            <div class="stat-foot">all-time historical</div>
           </div>
 
           <div class="stat-card amber">

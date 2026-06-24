@@ -12,10 +12,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 try:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(dotenv_path=PROJECT_ROOT / ".env")
 except Exception:  # pragma: no cover - dotenv is optional at runtime
     pass
 
@@ -51,9 +53,6 @@ def _env_list(name: str, default: List[str]) -> List[str]:
     if not raw:
         return default
     return [item.strip() for item in raw.split(",") if item.strip()]
-
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 @dataclass
