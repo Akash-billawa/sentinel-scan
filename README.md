@@ -58,21 +58,21 @@ The IPS module turns detection into action. It has three modes:
 #### How blocking works (two layers)
 
 ```
-                    ┌─────────────────────────────┐
-                    │     OS Firewall Layer        │
-                    │  (Windows Defender / iptables) │
-                    │  Drops packets at kernel level │
-                    │  nmap sees: "filtered"        │
-                    │  Requires: Admin + FW running │
-                    └─────────────────────────────┘
-                                   │
-                    ┌─────────────────────────────┐
-                    │   Application Layer          │
+                    ┌───────────────────────────────┐
+                    │       OS Firewall Layer       │
+                    │ (Windows Defender / iptables) │
+                    │ Drops packets at kernel level │
+                    │     nmap sees: "filtered"     │
+                    │ Requires: Admin + FW running  │
+                    └───────────────────────────────┘
+                                    │
+                    ┌───────────────────────────────┐
+                    │       Application Layer       │
                     │  (Flask before_request hook)  │
-                    │  Rejects HTTP at port 5000    │
-                    │  nmap sees: "open" still      │
-                    │  Works without Admin/FW       │
-                    └─────────────────────────────┘
+                    │   Rejects HTTP at port 5000   │
+                    │    nmap sees: "open" still    │
+                    │    Works without Admin/FW     │
+                    └───────────────────────────────┘
 ```
 
 **Layer 1 — OS Firewall (Windows Defender / iptables / nftables)**
