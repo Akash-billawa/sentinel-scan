@@ -320,6 +320,7 @@ pytest tests/ -v -k ips        # IPS-specific tests
 
 ```
 ├── backend/
+│   ├── __init__.py            # Python package indicator
 │   ├── alerts.py              # Alert dispatch (desktop, email, Telegram)
 │   ├── app.py                 # Flask application + REST API routes
 │   ├── approval_manager.py    # IPS pending actions (approve/deny/expire)
@@ -360,10 +361,18 @@ pytest tests/ -v -k ips        # IPS-specific tests
 ├── data/                      # SQLite database location
 ├── reports/                   # Generated PDF + CSV files
 ├── logs/                      # Application logs
+├── .env                       # Environment variables
 ├── .env.example               # All configurable env vars with docs
-├── PRD.txt                    # Full product requirements document
+├── .gitignore                 # Git ignore rules
+├── =                          # Temporary or junk file
+├── dashboard-top.png          # Dashboard screenshot
+├── foo.txt                    # Scratchpad text file
+├── README.md                  # Project documentation
 ├── requirements.txt           # Python dependencies
+├── server_stderr.log          # Server error log
+├── server_stdout.log          # Server standard output log
 ├── start.bat                  # Windows launcher with auto-elevation
+├── test_apis.py               # API testing script
 └── run.py                     # Entry point
 ```
 
